@@ -6,6 +6,7 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -54,6 +55,9 @@ class BackendSpec(_StrictModel):
 
     entry: str
     """``module:attr`` of the guest handler callable."""
+
+    transport: Literal["stdio", "loopback"] = "stdio"
+    """RPC transport used between host and guest."""
 
     startup_timeout_ms: int = Field(default=10_000, ge=100, le=120_000)
     call_timeout_ms: int = Field(default=5_000, ge=100, le=120_000)

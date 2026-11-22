@@ -11,7 +11,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import sys
+import urllib.error
+import urllib.request
 from collections import deque
 from typing import Any, Awaitable, Callable
 
@@ -72,13 +75,19 @@ class GuestProcess:
         self._stderr: deque[str] = deque(maxlen=_STDERR_LINES)
         self._last_error: str | None = None
         self.started_at: float | None = None
+        self.transport = self.backend.transport
+        self.token = secrets.token_urlsafe(32)
+        self.url: str | None = None
 
     @property
     def alive(self) -> bool:
         return (
             self._process is not None
             and self._process.returncode is None
-            and self._process.stdin is not None
+            and (
+                self.transport == "loopback"
+                or self._process.stdin is not None
+            )
         )
 
     @property
@@ -100,6 +109,8 @@ class GuestProcess:
             "whombat.plugins._runner",
             "--entry",
             self.backend.entry,
+            "--transport",
+            self.transport,
         ]
         root = self.source.root
         if root is not None:
@@ -115,6 +126,8 @@ class GuestProcess:
             environment["PYTHONPATH"] = os.pathsep.join(
                 part for part in parts if part
             )
+        if self.transport == "loopback":
+            environment["WHOMBAT_PLUGIN_TOKEN"] = self.token
 
         self._last_error = None
         self._process = await asyncio.create_subprocess_exec(
@@ -125,8 +138,11 @@ class GuestProcess:
             cwd=str(root) if root is not None else None,
             env=environment,
         )
-        self._reader = asyncio.create_task(self._read_stdout())
         self._stderr_reader = asyncio.create_task(self._read_stderr())
+        if self.transport == "loopback":
+            await self._await_loopback()
+        else:
+            self._reader = asyncio.create_task(self._read_stdout())
 
         try:
             await self.call(
@@ -153,11 +169,6 @@ class GuestProcess:
 
         self._next_id += 1
         request_id = str(self._next_id)
-        future: asyncio.Future = (
-            asyncio.get_running_loop().create_future()
-        )
-        self._pending[request_id] = future
-
         message = {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -165,6 +176,14 @@ class GuestProcess:
             "params": params or {},
         }
         timeout = (timeout_ms or self.backend.call_timeout_ms) / 1000
+
+        if self.transport == "loopback":
+            return await asyncio.to_thread(self._rpc_post, message, timeout)
+
+        future: asyncio.Future = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._pending[request_id] = future
         try:
             await self._write(message)
             return await asyncio.wait_for(future, timeout)
@@ -201,6 +220,76 @@ class GuestProcess:
                 task.cancel()
         self._fail_pending("Plugin process stopped")
         self._process = None
+
+    async def _await_loopback(self) -> None:
+        process = self._process
+        assert process is not None and process.stdout is not None
+        timeout = self.backend.startup_timeout_ms / 1000
+        try:
+            line = await asyncio.wait_for(
+                process.stdout.readline(), timeout
+            )
+        except asyncio.TimeoutError as error:
+            raise GuestError(
+                -32002, "Plugin did not announce its port"
+            ) from error
+        try:
+            payload = json.loads(line)
+            port = int(payload["port"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise GuestError(
+                ERROR_UNAVAILABLE, "Plugin sent an invalid ready message"
+            ) from error
+        self.url = f"http://127.0.0.1:{port}/rpc"
+
+    def _rpc_post(self, message: dict, timeout: float) -> Any:
+        if self.url is None:
+            raise GuestError(
+                ERROR_UNAVAILABLE, "Plugin process is unavailable"
+            )
+        request = urllib.request.Request(
+            self.url,
+            data=json.dumps(message).encode("utf-8"),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.token}",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as reply:
+                body = reply.read(MAX_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            if error.code == 401:
+                raise GuestError(
+                    ERROR_UNAVAILABLE, "Plugin rejected the host token"
+                ) from error
+            raise GuestError(
+                ERROR_UNAVAILABLE, f"Plugin HTTP error {error.code}"
+            ) from error
+        except (OSError, urllib.error.URLError) as error:
+            raise GuestError(
+                ERROR_UNAVAILABLE, "Plugin process is unavailable"
+            ) from error
+
+        if len(body) > MAX_RESPONSE_BYTES:
+            raise GuestError(
+                ERROR_UNAVAILABLE, "Plugin response exceeded size limit"
+            )
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as error:
+            raise GuestError(
+                ERROR_UNAVAILABLE, "Plugin wrote a malformed message"
+            ) from error
+
+        error = payload.get("error")
+        if error:
+            raise GuestError(
+                int(error.get("code", ERROR_UNAVAILABLE)),
+                str(error.get("message", "Plugin error")),
+            )
+        return payload.get("result")
 
     async def _write(self, message: dict) -> None:
         process = self._process

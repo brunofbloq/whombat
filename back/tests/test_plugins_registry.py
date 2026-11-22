@@ -42,6 +42,7 @@ def make_plugin(
     host_caps: list[str] | None = None,
     guest: str = GUEST,
     directory: str | None = None,
+    transport: str = "stdio",
 ) -> Path:
     root = tmp_path / "plugins" / (directory or plugin_id)
     package = root / "sample_guest"
@@ -57,8 +58,9 @@ def make_plugin(
                 "",
                 "[backend]",
                 'entry = "sample_guest:handle"',
-                "startup_timeout_ms = 5000",
-                "call_timeout_ms = 3000",
+                f'transport = "{transport}"',
+                "startup_timeout_ms = 20000",
+                "call_timeout_ms = 10000",
                 "",
                 "[capabilities]",
                 f"host = {json.dumps(host_caps or [])}",
@@ -224,6 +226,64 @@ async def test_start_failure_marks_plugin_failed(settings, tmp_path):
     status = registry.status("sample")
     assert status["status"] == "failed"
     assert status["last_error"]
+    await registry.shutdown()
+
+
+async def test_loopback_requires_bearer_token(settings, tmp_path):
+    import json
+    import urllib.error
+    import urllib.request
+
+    make_plugin(tmp_path, transport="loopback")
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", [])
+    guest = registry._records["sample"].guest
+    assert guest is not None
+    assert guest.url is not None
+
+    def post(token: str | None):
+        headers = {"Content-Type": "application/json"}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(
+            guest.url,
+            data=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "1",
+                    "method": "plugin.health",
+                    "params": {},
+                }
+            ).encode(),
+            method="POST",
+            headers=headers,
+        )
+        with urllib.request.urlopen(request, timeout=5) as reply:
+            return reply.status, json.loads(reply.read())
+
+    with pytest.raises(urllib.error.HTTPError) as missing:
+        post(None)
+    assert missing.value.code == 401
+
+    with pytest.raises(urllib.error.HTTPError) as wrong:
+        post("not-the-token")
+    assert wrong.value.code == 401
+
+    status, payload = post(guest.token)
+    assert status == 200
+    assert payload["result"] == {"ok": True}
+
+    await registry.shutdown()
+
+
+async def test_loopback_invoke_reaches_the_guest(settings, tmp_path):
+    make_plugin(tmp_path, transport="loopback")
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", [])
+
+    result = await registry.invoke("sample", "echo")
+
+    assert result == {"echo": "echo"}
     await registry.shutdown()
 
 

@@ -46,6 +46,7 @@ license = "MIT"
 
 [backend]
 entry = "acoustic_export.plugin:handle"   # module:attr
+transport = "stdio"                        # or "loopback"
 startup_timeout_ms = 10000
 call_timeout_ms = 5000
 
@@ -85,7 +86,15 @@ with `python -m whombat.plugins._runner`, with the plugin directory on
 `TEMP`, `TMP`, `COMSPEC`, `PATHEXT`, `LANG`, and the plugin's own `PYTHONPATH`.
 No `WHOMBAT_*` variables, database URLs, or settings are inherited.
 
-Transport is newline-delimited JSON-RPC 2.0 over stdin/stdout.
+Transport is newline-delimited JSON-RPC 2.0 over stdin/stdout (`stdio`, the
+default), or HTTP JSON-RPC on an ephemeral `127.0.0.1` port (`loopback`).
+
+For `loopback` the host generates a random bearer token per launch and passes it
+to the guest in `WHOMBAT_PLUGIN_TOKEN`. The guest binds `127.0.0.1:0`, prints
+`{"event": "ready", "port": <n>}` on stdout, and serves `POST /rpc`. Every
+request must carry `Authorization: Bearer <token>`; a missing or wrong token
+gets `401` and no JSON-RPC is executed. The host refuses to talk to a plugin
+that rejects its token.
 
 ### Host → guest methods
 
@@ -229,9 +238,6 @@ does not overpromise:
   A guest can still read files and make outbound calls.
 - **Memory ceiling.** Calls and responses are bounded, but there is no RSS
   limit on the guest process.
-- **Guest RPC transport.** Only newline JSON-RPC over stdio is implemented; the
-  loopback HTTP transport with a per-launch bearer token is not. (The UI asset
-  origin is a separate loopback server; the RPC channel is not.)
 
 ## Example guest
 
