@@ -205,7 +205,11 @@ class PluginRegistry:
             "trust": "trusted",
             "capabilities": [],
             "granted": [],
-            "ui_url": f"/plugins/pages/{source.id}/",
+            "ui_url": (
+                f"/plugins/pages/{source.id}/"
+                if getattr(source.module, "has_pages", False)
+                else None
+            ),
             "legacy": True,
             "last_error": record.last_error,
         }

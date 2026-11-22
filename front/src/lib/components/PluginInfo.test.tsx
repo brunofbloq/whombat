@@ -6,12 +6,33 @@ import PluginInfo from "./PluginInfo";
 describe("PluginInfo", () => {
   it("lets a ready plugin be viewed", () => {
     render(
-      <PluginInfo id="acme" name="Acme" url="/plugins/acme" status="ready" />,
+      <PluginInfo
+        id="acme"
+        name="Acme"
+        url="/plugins/acme"
+        uiUrl="/plugins/pages/acme/"
+        status="ready"
+      />,
     );
 
     expect(
       screen.getByRole("link", { name: "View" }).getAttribute("href"),
     ).toBe("/plugins/view?id=acme");
+  });
+
+  it("does not link to a ready plugin without a UI URL", () => {
+    render(
+      <PluginInfo
+        id="legacy"
+        name="Legacy"
+        url="/plugins/pages/legacy/"
+        uiUrl={null}
+        status="ready"
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "View" })).toBeNull();
+    expect(screen.queryByText("View")).toBeNull();
   });
 
   it("does not link to a disabled plugin", () => {
@@ -20,6 +41,7 @@ describe("PluginInfo", () => {
         id="acme"
         name="Acme"
         url="/plugins/acme"
+        uiUrl="/plugins/acme/index.html"
         status="disabled"
       />,
     );
@@ -64,5 +86,32 @@ describe("PluginInfo", () => {
 
     expect(screen.getByText("legacy")).toBeTruthy();
     expect(screen.getByText("module failed")).toBeTruthy();
+  });
+
+  it("allows testing a ready plugin but not a disabled one", () => {
+    const onTest = vi.fn();
+    const { rerender } = render(
+      <PluginInfo
+        name="Acme"
+        url="/plugins/acme"
+        status="ready"
+        onTest={onTest}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(onTest).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <PluginInfo
+        name="Acme"
+        url="/plugins/acme"
+        status="disabled"
+        onTest={onTest}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Test" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 });

@@ -21,6 +21,7 @@ export default function PluginInfo({
   version,
   thumbnail,
   url,
+  uiUrl,
   status = "disabled",
   trust,
   legacy,
@@ -28,11 +29,13 @@ export default function PluginInfo({
   onEnable,
   onDisable,
   onRestart,
+  onTest,
 }: {
   id?: string;
   name: string;
   description?: string | null;
   url: string;
+  uiUrl?: string | null;
   attribution?: string | null;
   version?: string | null;
   thumbnail?: string | null;
@@ -43,9 +46,13 @@ export default function PluginInfo({
   onEnable?: () => void;
   onDisable?: () => void;
   onRestart?: () => void;
+  onTest?: () => void;
 }) {
   const ready = status === "ready";
-  const viewHref = id ? `/plugins/view/?id=${encodeURIComponent(id)}` : null;
+  const viewHref =
+    id && uiUrl && status === "ready"
+      ? `/plugins/view/?id=${encodeURIComponent(id)}`
+      : null;
 
   return (
     <div className="flex flex-col items-center bg-white rounded-lg border shadow-sm md:flex-row md:max-w-xl border-stone-200 dark:bg-stone-800 dark:border-stone-700">
@@ -84,15 +91,16 @@ export default function PluginInfo({
         </p>
         {lastError && <p className="mb-2 text-xs text-red-600">{lastError}</p>}
         <div className="flex flex-wrap items-center gap-2">
-          {viewHref && ready ? (
-            <Link mode="text" href={viewHref}>
-              View
-            </Link>
-          ) : (
-            <span className="cursor-not-allowed text-sm text-stone-400">
-              View
-            </span>
-          )}
+          {uiUrl &&
+            (viewHref ? (
+              <Link mode="text" href={viewHref}>
+                View
+              </Link>
+            ) : (
+              <span className="cursor-not-allowed text-sm text-stone-400">
+                View
+              </span>
+            ))}
           <button
             type="button"
             className="rounded border px-2 py-1 text-sm disabled:opacity-40"
@@ -116,6 +124,14 @@ export default function PluginInfo({
             onClick={onRestart}
           >
             Restart
+          </button>
+          <button
+            type="button"
+            className="rounded border px-2 py-1 text-sm disabled:opacity-40"
+            disabled={!ready}
+            onClick={onTest}
+          >
+            Test
           </button>
           <span className="text-xs text-stone-400">{url}</span>
         </div>

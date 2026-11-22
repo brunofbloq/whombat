@@ -151,6 +151,26 @@ def test_discovered_plugin_is_disabled(settings, tmp_path):
     assert registry._records["sample"].guest is None
 
 
+def test_legacy_ui_url_only_exists_when_plugin_has_pages(settings):
+    from types import SimpleNamespace
+
+    registry = PluginRegistry(settings)
+    module = SimpleNamespace(__description__="A legacy plugin", has_pages=False)
+    source = SimpleNamespace(
+        id="legacy-sample", module=module, manifest=None, legacy=True
+    )
+    record = SimpleNamespace(
+        source=source, status="ready", last_error=None
+    )
+
+    status = registry._status(record)
+
+    assert status["url"] == "/plugins/pages/legacy-sample/"
+    assert status["ui_url"] is None
+    module.has_pages = True
+    assert registry._status(record)["ui_url"] == "/plugins/pages/legacy-sample/"
+
+
 def test_incompatible_api_version_is_not_started(settings, tmp_path):
     make_plugin(tmp_path, api_version="9.0")
     registry = PluginRegistry(settings)

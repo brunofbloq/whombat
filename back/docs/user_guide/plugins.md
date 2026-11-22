@@ -32,13 +32,13 @@ for you.
 
 ## Enabling a plugin
 
-1. Open **Plugins** in the sidebar.
-2. Find the plugin. New ones show the status **disabled**.
+1. Open **User → Plugins**.
+2. Find the plugin in the list, which shows its description if one is available.
+   New plugins show the status **disabled**.
 3. Click **Enable**.
 4. Whombat lists the data the plugin asked for — for example "read datasets" or
    "read recordings". Only continue if you trust the plugin with that data.
-5. The status becomes **ready** and the **View** button appears when the plugin
-   has its own screen.
+5. The status becomes **ready**.
 
 Plugins that are disabled cannot run code, open files, or use the network.
 
@@ -48,7 +48,7 @@ Plugins that are disabled cannot run code, open files, or use the network.
 |---|---|
 | **disabled** | installed, not running |
 | **starting** | being launched |
-| **ready** | running; you can open it |
+| **ready** | running |
 | **unhealthy** | running but its health check failed |
 | **crashed** | it stopped unexpectedly; try **Restart** |
 | **incompatible** | built for a different Whombat plugin version |
@@ -73,8 +73,11 @@ access, Whombat asks you to approve it again.
 
 ## Opening and closing a plugin
 
-- **View** opens the plugin's own screen inside a sandboxed frame. The plugin
-  cannot read your Whombat session, cookies, or other browser data from there.
+- The **View** link appears only if the plugin has its own UI page. It opens the
+  page inside a sandboxed frame. The plugin cannot read your Whombat session,
+  cookies, or other browser data from there.
+- **Test** runs the health check. It is available for **ready** and `legacy`
+  plugins and disabled for **disabled** plugins.
 - **Disable** stops it immediately and revokes its permissions.
 - **Restart** stops and starts it again, keeping the permissions you approved.
 - Removing the plugin is done by deleting its folder from the plugins directory

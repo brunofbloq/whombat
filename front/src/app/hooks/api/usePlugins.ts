@@ -41,10 +41,23 @@ export default function usePlugins() {
     onError: () => toast.error("Could not restart plugin"),
   });
 
+  const health = useMutation({
+    mutationFn: (id: string) => api.plugins.health(id),
+    onSuccess: (result) => {
+      if (result.checks?.every((check) => check.ok === true)) {
+        toast.success("Plugin health check passed");
+      } else {
+        toast.error(result.last_error ?? "Plugin health check failed");
+      }
+      refetch();
+    },
+    onError: () => toast.error("Could not test plugin"),
+  });
+
   return {
     items: query.data,
     total: query.data?.length,
     query,
-    actions: { enable, disable, restart },
+    actions: { enable, disable, restart, health },
   };
 }

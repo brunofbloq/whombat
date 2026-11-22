@@ -67,6 +67,21 @@ function UserMenu({ user, onLogout }: { user?: User; onLogout?: () => void }) {
           </Menu.Item>
           <Menu.Item>
             {({ active }) => (
+              <a
+                href="/plugins/"
+                className={classnames(
+                  active
+                    ? "bg-stone-300 text-stone-900 dark:bg-stone-800 dark:text-stone-100"
+                    : "bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-300",
+                  "group flex w-full items-center rounded-md px-2 py-2 text-sm",
+                )}
+              >
+                Plugins
+              </a>
+            )}
+          </Menu.Item>
+          <Menu.Item>
+            {({ active }) => (
               <button
                 onClick={() => logout()}
                 className={classnames(

@@ -42,6 +42,7 @@ export default function Page() {
                 version={plugin.version}
                 thumbnail={plugin.thumbnail}
                 url={plugin.url}
+                uiUrl={plugin.ui_url}
                 status={plugin.status}
                 trust={plugin.trust}
                 legacy={plugin.legacy}
@@ -54,6 +55,7 @@ export default function Page() {
                 }
                 onDisable={() => actions.disable.mutate(pluginId)}
                 onRestart={() => actions.restart.mutate(pluginId)}
+                onTest={() => actions.health.mutate(pluginId)}
               />
             );
           })}
