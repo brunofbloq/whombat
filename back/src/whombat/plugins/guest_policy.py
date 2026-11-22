@@ -91,6 +91,23 @@ def install(root: str | None = None) -> None:
                 raise PermissionError(
                     "Plugin is not allowed to reach that host"
                 )
+            return
+
+        if event in (
+            "subprocess.Popen",
+            "os.system",
+            "os.exec",
+            "os.spawn",
+            "os.posix_spawn",
+        ):
+            raise PermissionError(
+                "Plugin is not allowed to start processes"
+            )
+
+        if event in ("ctypes.dlopen", "ctypes.dlsym"):
+            raise PermissionError(
+                "Plugin is not allowed to load native libraries"
+            )
 
     sys.addaudithook(hook)
 

@@ -152,9 +152,11 @@ granted at runtime.
   redirects are refused, and responses are capped at 64 KiB.
 - The guest process installs a Python audit hook before importing plugin code
   (`guest_policy.py`). It denies `open` outside the plugin root, the interpreter
-  installation and the declared `fs_read` roots, and denies `socket.connect` to
-  hosts not declared in `net`. A plugin that tries either gets
-  `PermissionError`; the host reports the failure through the normal error path.
+  installation and the declared `fs_read` roots; denies `socket.connect` to
+  hosts not declared in `net`; denies process creation (`subprocess.Popen`,
+  `os.system`, `os.exec*`, `os.spawn*`); and denies loading new native libraries
+  (`ctypes.dlopen`, `ctypes.dlsym`). A plugin that tries any of these gets
+  `PermissionError`.
 - The guest process itself is not filesystem- or network-jailed: plugin code
   that opens a file or socket directly is outside the broker. `fs_read` and
   `net` constrain host-brokered access, not the OS.
@@ -260,10 +262,11 @@ Handshake:
 These spec items are not implemented yet and are tracked here so the contract
 does not overpromise:
 
-- **Native sandbox bypass.** The runtime policy is a Python audit hook: native
-  extensions, `ctypes`, or a subprocess started by the plugin can bypass it.
-  A true jail needs OS-level sandboxing (Windows AppContainer/restricted token,
-  Linux mount + network namespaces/seccomp), which is not implemented.
+- **No OS jail.** The runtime policy is a Python audit hook. It blocks the
+  usual escape hatches (`ctypes`, subprocesses, arbitrary opens and connects),
+  but a determined bypass using already-loaded native code or OS primitives is
+  still possible. A true jail needs Windows AppContainer/restricted token and
+  Linux mount + network namespaces/seccomp, which is not implemented.
 - **Direct guest sockets.** The network hook blocks `socket.connect` to
   undeclared hosts, but asyncio's own wake-up socket is created before the hook
   and loopback traffic is not otherwise modelled. Plugins that need network

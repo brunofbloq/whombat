@@ -42,6 +42,8 @@ def handle(method, params):
 
 GUARDED_GUEST = """
 import socket
+import subprocess
+import sys
 
 def handle(method, params):
     if method == "plugin.describe":
@@ -62,6 +64,23 @@ def handle(method, params):
             return {"connected": True}
         except PermissionError:
             return {"denied": True}
+    if operation == "spawn":
+        try:
+            subprocess.run(
+                [sys.executable, "-c", "print(1)"], check=False
+            )
+            return {"spawned": True}
+        except PermissionError:
+            return {"denied": True}
+    if operation == "native":
+        import ctypes
+        try:
+            ctypes.CDLL("kernel32.dll")
+            return {"loaded": True}
+        except PermissionError:
+            return {"denied": True}
+        except OSError as error:
+            return {"error": type(error).__name__}
     return {"ok": True}
 """
 
@@ -491,6 +510,21 @@ async def test_guest_cannot_connect_to_undeclared_hosts(settings, tmp_path):
     )
 
     assert result == {"denied": True}
+    await registry.shutdown()
+
+
+async def test_guest_cannot_spawn_processes_or_load_native_code(
+    settings, tmp_path
+):
+    make_plugin(tmp_path, guest=GUARDED_GUEST)
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", [])
+
+    spawned = await registry.invoke("sample", "spawn", {})
+    native = await registry.invoke("sample", "native", {})
+
+    assert spawned == {"denied": True}
+    assert native == {"denied": True}
     await registry.shutdown()
 
 
