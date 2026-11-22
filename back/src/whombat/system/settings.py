@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     Nothing in this directory is imported until the user enables it.
     """
 
+    plugin_idle_timeout_seconds: int = 300
+    """Stop a running plugin guest after this many idle seconds.
+
+    Set to 0 to disable the idle sweep.
+    """
+
     host: str = "localhost"
     """Host on which the backend is running."""
 

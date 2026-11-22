@@ -68,6 +68,10 @@ class PluginRegistry:
         self.plugins_dir = plugins_dir_for(settings)
         self._records: dict[str, _Record] = {}
         self._index: dict[str, str] = {}
+        self._last_activity: dict[str, float] = {}
+        self.idle_timeout = getattr(
+            settings, "plugin_idle_timeout_seconds", 0
+        )
         self._grants_path = self.plugins_dir / GRANTS_FILE
         self.refresh()
 
@@ -288,6 +292,7 @@ class PluginRegistry:
         record.status = "ready"
         record.last_error = None
         record.enabled_at = time.monotonic()
+        self._last_activity[plugin_id] = record.enabled_at
         self._write_grants()
         audit.info("plugin enabled id=%s grants=%s", plugin_id, ",".join(requested))
         return self._status(record)
@@ -378,9 +383,35 @@ class PluginRegistry:
         guest = record.guest
         if guest is None or not guest.alive or record.status != "ready":
             raise GuestError(-32004, "Plugin is not running")
+        self._last_activity[plugin_id] = time.monotonic()
         return await guest.call(
             "invoke", {"operation": operation, "args": args or {}}
         )
+
+    async def sweep_idle(self) -> list[str]:
+        """Stop guests that have been idle longer than the timeout."""
+        if self.idle_timeout <= 0:
+            return []
+
+        now = time.monotonic()
+        stopped: list[str] = []
+        for plugin_id, record in list(self._records.items()):
+            if record.guest is None or not record.guest.alive:
+                continue
+            last = self._last_activity.get(
+                plugin_id, record.enabled_at or now
+            )
+            if now - last < self.idle_timeout:
+                continue
+            await self._stop(record)
+            record.status = "disabled"
+            record.grants = []
+            stopped.append(record.source.id)
+
+        if stopped:
+            self._write_grants()
+            audit.info("idle plugins stopped: %s", ",".join(stopped))
+        return stopped
 
     async def _stop(self, record: _Record) -> None:
         if record.guest is not None:
@@ -435,6 +466,7 @@ class PluginRegistry:
         if handler is None:
             raise GuestError(-32601, "Unknown operation")
 
+        self._last_activity[plugin_id] = time.monotonic()
         return await handler(self.settings, arguments)
 
     # -- grants persistence ------------------------------------------

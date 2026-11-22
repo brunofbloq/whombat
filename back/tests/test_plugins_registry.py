@@ -227,6 +227,21 @@ async def test_start_failure_marks_plugin_failed(settings, tmp_path):
     await registry.shutdown()
 
 
+async def test_idle_guest_is_stopped(settings, tmp_path):
+    make_plugin(tmp_path)
+    settings.plugin_idle_timeout_seconds = 60
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", [])
+    assert registry.status("sample")["status"] == "ready"
+
+    registry._last_activity["sample"] -= 120
+    stopped = await registry.sweep_idle()
+
+    assert "sample" in stopped
+    assert registry.status("sample")["status"] == "disabled"
+    assert registry._records["sample"].guest is None
+
+
 def test_grants_persist_and_invalidate_on_capability_change(
     settings, tmp_path
 ):

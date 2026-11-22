@@ -136,7 +136,9 @@ Statuses: `discovered`, `disabled`, `starting`, `ready`, `unhealthy`,
 - Changing the declared capabilities or the version invalidates the stored
   grants; the plugin must be approved again.
 - A crash or timeout stops that plugin only; the rest of the app keeps serving
-  and the plugin reports `failed` or `unhealthy` with a message.
+  and the plugin reports `crashed` or `failed` with a message.
+- A guest that stays idle for `plugin_idle_timeout_seconds` (default 300, `0`
+  disables the sweep) is stopped and the plugin returns to `disabled`.
 - Disabling, restarting, and uninstalling work without restarting Whombat.
 - On app shutdown every guest is stopped.
 
@@ -223,8 +225,6 @@ does not overpromise:
   A guest can still read files and make outbound calls.
 - **Memory ceiling.** Calls and responses are bounded, but there is no RSS
   limit on the guest process.
-- **Idle timeout.** Guests run until the plugin is disabled, restarted, crashes,
-  or the app stops. There is no automatic stop after inactivity.
 - **Loopback transport.** Only newline JSON-RPC over stdio is implemented; the
   loopback HTTP transport with a per-launch bearer token is not.
 
