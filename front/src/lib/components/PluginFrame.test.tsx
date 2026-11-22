@@ -25,6 +25,23 @@ describe("PluginFrame", () => {
     expect(element.getAttribute("srcdoc")).toBeNull();
   });
 
+  it("loads the bundle from another origin inside a sandboxed frame", () => {
+    render(
+      <PluginFrame
+        pluginId="acme"
+        src="http://127.0.0.1:49152/acme/index.html"
+        title="Acme"
+      />,
+    );
+
+    const element = frame();
+
+    expect(element.src).toBe("http://127.0.0.1:49152/acme/index.html");
+    expect(window.location.origin).not.toBe("http://127.0.0.1:49152");
+    expect(element.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(element.getAttribute("sandbox")).not.toContain("allow-same-origin");
+  });
+
   it("ignores messages that are not from the frame origin", () => {
     render(
       <PluginFrame

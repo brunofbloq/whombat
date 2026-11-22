@@ -20,7 +20,6 @@ __all__ = ["add_routes"]
 def add_routes(app: FastAPI, settings: Settings):
     # NOTE: Import routes here to avoid circular imports
     from whombat.routes import get_main_router
-    from whombat.routes.plugins import plugin_assets_router
 
     # Add default routes.
     main_router = get_main_router(settings)
@@ -44,12 +43,8 @@ def add_routes(app: FastAPI, settings: Settings):
         except Exception:
             warnings.warn(f"Plugin {name} failed to load.", stacklevel=2)
 
-    # Confined static assets for manifest plugins.
-    app.include_router(
-        plugin_assets_router,
-        prefix="/plugins/assets",
-        tags=["Plugins"],
-    )
+    # Confined static assets for manifest plugins are served from a
+    # separate loopback origin; see whombat.plugins.ui_server.
 
     # Make sure the user guide directory exists.
     # Otherwise app initialization will fail.

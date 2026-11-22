@@ -1,29 +1,18 @@
 """REST API routes for plugins."""
 
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from whombat import schemas
-from whombat.plugins import (
-    AssetNotFound,
-    GuestError,
-    PluginNotFound,
-    PluginRegistry,
-    resolve_plugin_asset,
-)
+from whombat.plugins import GuestError, PluginNotFound, PluginRegistry
 from whombat.routes.dependencies.auth import get_current_user_dependency
 from whombat.routes.dependencies.settings import WhombatSettings
 
 __all__ = [
     "get_plugin_router",
-    "plugin_assets_router",
 ]
-
-plugin_assets_router = APIRouter()
 
 _HTTP_FOR_CODE = {
     -32001: status.HTTP_403_FORBIDDEN,
@@ -66,6 +55,15 @@ def _lookup(registry: PluginRegistry, plugin_id: str) -> dict:
         ) from error
 
 
+async def _ensure_ui_origin(request: Request, registry: PluginRegistry) -> None:
+    """Start the plugin origin on first use, e.g. after a hot refresh."""
+    if registry.ui_base is not None or not registry.has_ui_plugins():
+        return
+    server = getattr(request.app.state, "plugin_ui_server", None)
+    if server is not None:
+        registry.ui_base = await server.start()
+
+
 def get_plugin_router(settings: WhombatSettings) -> APIRouter:
     """Build the authenticated plugin router."""
     router = APIRouter()
@@ -81,7 +79,9 @@ def get_plugin_router(settings: WhombatSettings) -> APIRouter:
     ):
         """List every discovered plugin and its status."""
         del user
-        return _registry(request).list_status()
+        registry = _registry(request)
+        await _ensure_ui_origin(request, registry)
+        return registry.list_status()
 
     @router.get(
         "/{plugin_id}/status/",
@@ -96,6 +96,7 @@ def get_plugin_router(settings: WhombatSettings) -> APIRouter:
         del user
         registry = _registry(request)
         _lookup(registry, plugin_id)
+        await _ensure_ui_origin(request, registry)
         return registry.status(plugin_id)
 
     @router.post(
@@ -206,33 +207,3 @@ def get_plugin_router(settings: WhombatSettings) -> APIRouter:
             ) from error
 
     return router
-
-
-@plugin_assets_router.get("/{plugin_id}/{path:path}")
-async def plugin_asset(
-    plugin_id: str,
-    path: str,
-    request: Request,
-):
-    """Serve a confined static asset for a plugin UI."""
-    registry = _registry(request)
-    try:
-        root = registry.asset_root(plugin_id)
-    except PluginNotFound as error:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown plugin"
-        ) from error
-
-    if root is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No assets"
-        )
-
-    try:
-        asset = resolve_plugin_asset(Path(root), path)
-    except AssetNotFound as error:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(error)
-        ) from error
-
-    return FileResponse(asset)

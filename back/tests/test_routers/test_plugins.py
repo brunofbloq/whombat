@@ -79,7 +79,8 @@ class TestPluginRoutes:
         assert entry["status"] == "disabled"
         assert entry["trust"] == "untrusted"
         assert entry["legacy"] is False
-        assert entry["ui_url"] == "/plugins/assets/sample/dist/index.html"
+        assert entry["ui_url"].startswith("http://127.0.0.1:")
+        assert entry["ui_url"].endswith("/sample/dist/index.html")
 
     def test_list_accepts_missing_version(
         self, plugin_client, cookies, tmp_path
@@ -178,21 +179,56 @@ class TestCrashedPlugin:
 
 
 class TestPluginAssets:
-    def test_serves_asset_inside_root(self, plugin_client, tmp_path):
-        add_plugin(plugin_client, tmp_path, ui=True)
+    def test_serves_assets_from_a_separate_origin(
+        self, plugin_client, cookies, tmp_path
+    ):
+        import httpx
 
-        response = plugin_client.get(
-            "/plugins/assets/sample/dist/index.html"
+        add_plugin(plugin_client, tmp_path, ui=True)
+        listed = plugin_client.get(
+            "/api/v1/plugins/list/", cookies=cookies
         )
+        entry = next(
+            item for item in listed.json() if item["id"] == "sample"
+        )
+        ui_url = entry["ui_url"]
+
+        assert ui_url.startswith("http://127.0.0.1:")
+        assert "/plugins/assets/" not in ui_url
+
+        response = httpx.get(ui_url, cookies={"session": "host-secret"})
 
         assert response.status_code == 200
         assert response.text == "ui"
+        # The asset origin never sets or forwards host session cookies.
+        assert "set-cookie" not in response.headers
+        assert "access-control-allow-origin" not in response.headers
 
-    def test_rejects_traversal(self, plugin_client, tmp_path):
+    def test_host_origin_does_not_serve_plugin_html(
+        self, plugin_client, cookies, tmp_path
+    ):
         add_plugin(plugin_client, tmp_path, ui=True)
 
         response = plugin_client.get(
-            "/plugins/assets/sample/../../etc/passwd"
+            "/plugins/assets/sample/dist/index.html", cookies=cookies
         )
+
+        assert response.text != "ui"
+
+    def test_rejects_traversal_on_the_plugin_origin(
+        self, plugin_client, cookies, tmp_path
+    ):
+        import httpx
+
+        add_plugin(plugin_client, tmp_path, ui=True)
+        listed = plugin_client.get(
+            "/api/v1/plugins/list/", cookies=cookies
+        )
+        entry = next(
+            item for item in listed.json() if item["id"] == "sample"
+        )
+        origin = entry["ui_url"].rsplit("/sample/", 1)[0]
+
+        response = httpx.get(f"{origin}/sample/%2e%2e/%2e%2e/etc/passwd")
 
         assert response.status_code in {400, 404}

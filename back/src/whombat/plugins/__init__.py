@@ -26,6 +26,7 @@ from whombat.plugins.manifest import (
     load_manifest,
 )
 from whombat.plugins.registry import PluginNotFound, PluginRegistry
+from whombat.plugins.ui_server import PluginUIServer
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -37,6 +38,7 @@ __all__ = [
     "PluginNotFound",
     "PluginRegistry",
     "PluginSource",
+    "PluginUIServer",
     "add_plugin_pages",
     "add_plugin_routes",
     "discover_plugins",

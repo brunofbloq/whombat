@@ -72,6 +72,7 @@ class PluginRegistry:
         self.idle_timeout = getattr(
             settings, "plugin_idle_timeout_seconds", 0
         )
+        self.ui_base: str | None = None
         self._grants_path = self.plugins_dir / GRANTS_FILE
         self.refresh()
 
@@ -163,6 +164,15 @@ class PluginRegistry:
             if record.source.legacy and record.source.module is not None
         ]
 
+    def has_ui_plugins(self) -> bool:
+        """Return True when at least one plugin ships a UI entry."""
+        return any(
+            record.source.manifest is not None
+            and record.source.manifest.ui is not None
+            and bool(record.source.manifest.ui.entry)
+            for record in self._records.values()
+        )
+
     def _record(self, plugin_id: str) -> _Record:
         key = self._index.get(plugin_id)
         if key is None:
@@ -208,9 +218,13 @@ class PluginRegistry:
             }
 
         ui_url = None
-        if manifest.ui is not None and manifest.ui.entry:
+        if (
+            manifest.ui is not None
+            and manifest.ui.entry
+            and self.ui_base is not None
+        ):
             ui_url = (
-                f"/plugins/assets/{manifest.id}/{manifest.ui.entry}"
+                f"{self.ui_base}/{manifest.id}/{manifest.ui.entry}"
             )
 
         return {

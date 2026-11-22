@@ -175,7 +175,7 @@ working:
   "trust": "untrusted",
   "capabilities": ["datasets.read"],
   "granted": [],
-  "ui_url": "/plugins/assets/acoustic-export/dist/index.html",
+  "ui_url": "http://127.0.0.1:49152/acoustic-export/dist/index.html",
   "legacy": false,
   "last_error": null
 }
@@ -183,15 +183,23 @@ working:
 
 ## UI contract
 
-Assets under the plugin directory are served at
-`/plugins/assets/<plugin-id>/<path>`. Resolution is confined: absolute paths,
-`..` segments, and symlinks that escape the plugin root return 404.
+Plugin assets are served from a **separate loopback origin**, not from the
+Whombat origin. At start-up (or on the first request after a hot refresh)
+Whombat starts a small asset server on an ephemeral `127.0.0.1` port and
+reports each plugin's `ui_url` as an absolute URL such as
+`http://127.0.0.1:49152/acoustic-export/dist/index.html`. The application
+origin no longer serves plugin HTML.
+
+Resolution on that origin is confined: absolute paths, `..` segments, and
+symlinks that escape the plugin root return 404. The origin sets no cookies and
+sends no CORS headers, so a page there cannot act as the user.
 
 The UI renders in an iframe with `sandbox="allow-scripts"` and no
-`allow-same-origin`, so the bundle gets an opaque origin: it cannot read host
-cookies, `localStorage`, or `IndexedDB`, and no plugin script runs in the host
-document. The host page opens it at `/plugins/view/?id=<plugin-id>` and only for
-`ready` plugins.
+`allow-same-origin`. Even though the asset origin is already separate, the
+sandbox gives the frame an opaque origin: it cannot read host cookies,
+`localStorage`, or `IndexedDB`, and no plugin script runs in the host document.
+The host page opens it at `/plugins/view/?id=<plugin-id>` and only for `ready`
+plugins.
 
 Handshake:
 
@@ -216,17 +224,14 @@ Handshake:
 These spec items are not implemented yet and are tracked here so the contract
 does not overpromise:
 
-- **Distinct UI origin.** Plugin assets are served from the app origin at
-  `/plugins/assets/...`. Isolation comes from the iframe sandbox (no
-  `allow-same-origin`, opaque `"null"` origin), not from a separate port or
-  host. A plugin that is opened outside the frame would be same-origin.
 - **Filesystem and network enforcement.** `fs_read` and `net` are declared and
   shown in the manifest, and `fs_read` is not yet used to restrict anything.
   A guest can still read files and make outbound calls.
 - **Memory ceiling.** Calls and responses are bounded, but there is no RSS
   limit on the guest process.
-- **Loopback transport.** Only newline JSON-RPC over stdio is implemented; the
-  loopback HTTP transport with a per-launch bearer token is not.
+- **Guest RPC transport.** Only newline JSON-RPC over stdio is implemented; the
+  loopback HTTP transport with a per-launch bearer token is not. (The UI asset
+  origin is a separate loopback server; the RPC channel is not.)
 
 ## Example guest
 
