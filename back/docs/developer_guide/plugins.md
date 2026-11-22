@@ -150,6 +150,11 @@ granted at runtime.
   `https` URLs are accepted, the host must match a declared entry exactly or via
   a `*.example.org` pattern, URLs with embedded credentials are rejected,
   redirects are refused, and responses are capped at 64 KiB.
+- The guest process installs a Python audit hook before importing plugin code
+  (`guest_policy.py`). It denies `open` outside the plugin root, the interpreter
+  installation and the declared `fs_read` roots, and denies `socket.connect` to
+  hosts not declared in `net`. A plugin that tries either gets
+  `PermissionError`; the host reports the failure through the normal error path.
 - The guest process itself is not filesystem- or network-jailed: plugin code
   that opens a file or socket directly is outside the broker. `fs_read` and
   `net` constrain host-brokered access, not the OS.
@@ -255,13 +260,14 @@ Handshake:
 These spec items are not implemented yet and are tracked here so the contract
 does not overpromise:
 
-- **Network policy for guest sockets.** `net` is enforced for the brokered
-  `net.get/fetch` operation only. A guest can still open its own sockets; the
-  supported path for a plugin that needs network access is the broker, and code
-  that bypasses it is trusted code by definition.
-- **Filesystem jail for guest code.** `fs_read` confines brokered reads; it does
-  not prevent plugin code from opening files directly. A real jail needs
-  OS-level sandboxing (Windows AppContainer, Linux namespaces/seccomp).
+- **Native sandbox bypass.** The runtime policy is a Python audit hook: native
+  extensions, `ctypes`, or a subprocess started by the plugin can bypass it.
+  A true jail needs OS-level sandboxing (Windows AppContainer/restricted token,
+  Linux mount + network namespaces/seccomp), which is not implemented.
+- **Direct guest sockets.** The network hook blocks `socket.connect` to
+  undeclared hosts, but asyncio's own wake-up socket is created before the hook
+  and loopback traffic is not otherwise modelled. Plugins that need network
+  access should use `net.get/fetch`, which is fully checked.
 
 ## Example guest
 

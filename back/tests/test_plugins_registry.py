@@ -40,6 +40,31 @@ def handle(method, params):
     return {"size": len(data)}
 """
 
+GUARDED_GUEST = """
+import socket
+
+def handle(method, params):
+    if method == "plugin.describe":
+        return {"id": "sample"}
+    args = params.get("args", {})
+    operation = params.get("operation")
+    if operation == "read":
+        try:
+            with open(args["path"]) as handle:
+                return {"text": handle.read()}
+        except PermissionError:
+            return {"denied": True}
+    if operation == "connect":
+        try:
+            socket.create_connection(
+                (args["host"], args["port"]), timeout=1
+            )
+            return {"connected": True}
+        except PermissionError:
+            return {"denied": True}
+    return {"ok": True}
+"""
+
 
 def make_plugin(
     tmp_path,
@@ -423,6 +448,49 @@ async def test_net_broker_only_reaches_declared_hosts(settings, tmp_path):
     assert redirect.value.code == -32003
 
     server.shutdown()
+    await registry.shutdown()
+
+
+async def test_guest_cannot_open_paths_outside_declared_roots(
+    settings, tmp_path
+):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    (allowed / "inside.txt").write_text("hello", encoding="utf-8")
+    (tmp_path / "outside.txt").write_text("secret", encoding="utf-8")
+
+    make_plugin(
+        tmp_path,
+        guest=GUARDED_GUEST,
+        host_caps=["fs.read"],
+        fs_read=[str(allowed)],
+    )
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", ["fs.read"])
+
+    inside = await registry.invoke(
+        "sample", "read", {"path": str(allowed / "inside.txt")}
+    )
+    assert inside["text"] == "hello"
+
+    outside = await registry.invoke(
+        "sample", "read", {"path": str(tmp_path / "outside.txt")}
+    )
+    assert outside == {"denied": True}
+
+    await registry.shutdown()
+
+
+async def test_guest_cannot_connect_to_undeclared_hosts(settings, tmp_path):
+    make_plugin(tmp_path, guest=GUARDED_GUEST)
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", [])
+
+    result = await registry.invoke(
+        "sample", "connect", {"host": "example.com", "port": 80}
+    )
+
+    assert result == {"denied": True}
     await registry.shutdown()
 
 

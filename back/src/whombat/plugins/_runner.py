@@ -10,6 +10,9 @@ Two transports are supported:
 * ``loopback``: HTTP JSON-RPC on an ephemeral 127.0.0.1 port, authenticated
   with a per-launch bearer token supplied by the host in
   ``WHOMBAT_PLUGIN_TOKEN``.
+
+The event loop is created before the guest policy is installed, because
+asyncio's own wake-up socket would otherwise be denied by the network hook.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from whombat.plugins import limits
+from whombat.plugins import guest_policy, limits
 
 ERROR_UNKNOWN_METHOD = -32601
 ERROR_PLUGIN = -32004
@@ -76,11 +79,6 @@ def _error_response(request_id, message: str, code: int) -> dict:
     }
 
 
-def _serve_stdio(handler) -> None:
-    """Run the stdio transport; use ``_serve_stdio_async`` in a loop."""
-    asyncio.run(_serve_stdio_async(handler))
-
-
 async def _serve_stdio_async(handler) -> None:
     for line in sys.stdin:
         line = line.strip()
@@ -97,7 +95,11 @@ async def _serve_stdio_async(handler) -> None:
         method = request.get("method")
         params = request.get("params") or {}
         if not isinstance(method, str) or not isinstance(params, dict):
-            _emit(_error_response(request_id, "Unsupported request", ERROR_UNKNOWN_METHOD))
+            _emit(
+                _error_response(
+                    request_id, "Unsupported request", ERROR_UNKNOWN_METHOD
+                )
+            )
             continue
 
         try:
@@ -114,7 +116,13 @@ async def _serve_stdio_async(handler) -> None:
             return
 
 
-def _serve_loopback(handler, token: str) -> None:
+def _serve_loopback(handler, token: str, loop: asyncio.AbstractEventLoop) -> None:
+    def dispatch(method: str, params: dict) -> Any:
+        future = asyncio.run_coroutine_threadsafe(
+            _dispatch(handler, method, params), loop
+        )
+        return future.result(timeout=30)
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -156,13 +164,15 @@ def _serve_loopback(handler, token: str) -> None:
                 self._respond(
                     200,
                     _error_response(
-                        request_id, "Unsupported request", ERROR_UNKNOWN_METHOD
+                        request_id,
+                        "Unsupported request",
+                        ERROR_UNKNOWN_METHOD,
                     ),
                 )
                 return
 
             try:
-                result = asyncio.run(_dispatch(handler, method, params))
+                result = dispatch(method, params)
                 self._respond(
                     200,
                     {
@@ -206,16 +216,23 @@ def main() -> None:
         sys.path.insert(0, arguments.root)
 
     limits.apply_posix_memory_limit()
+
+    # The loop must exist before the policy is installed.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    guest_policy.install(arguments.root)
+
     handler = _load_handler(arguments.entry)
 
     if arguments.transport == "loopback":
         token = os.environ.get(TOKEN_ENV, "")
         if not token:
             raise SystemExit("missing plugin token")
-        _serve_loopback(handler, token)
+        threading.Thread(target=loop.run_forever, daemon=True).start()
+        _serve_loopback(handler, token, loop)
         return
 
-    _serve_stdio(handler)
+    loop.run_until_complete(_serve_stdio_async(handler))
 
 
 if __name__ == "__main__":

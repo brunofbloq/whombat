@@ -18,7 +18,7 @@ import urllib.request
 from collections import deque
 from typing import Any, Awaitable, Callable
 
-from whombat.plugins import limits
+from whombat.plugins import guest_policy, limits
 from whombat.plugins.discovery import PluginSource
 
 __all__ = ["GuestError", "GuestProcess"]
@@ -134,6 +134,13 @@ class GuestProcess:
             environment[limits.MEMORY_LIMIT_ENV] = str(
                 self.backend.memory_mb
             )
+        manifest = self.manifest
+        environment[guest_policy.FS_ENV] = json.dumps(
+            list(manifest.capabilities.fs_read)
+        )
+        environment[guest_policy.NET_ENV] = json.dumps(
+            list(manifest.capabilities.net)
+        )
 
         self._last_error = None
         self._process = await asyncio.create_subprocess_exec(
