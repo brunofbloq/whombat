@@ -268,9 +268,10 @@ does not overpromise:
 - **No OS jail for files and sockets.** The runtime policy is a Python audit
   hook, and on Windows the Job Object blocks child processes at kernel level.
   Filesystem and network isolation still rely on the hook: a determined bypass
-  using already-loaded native code or OS primitives is possible. A true jail
-  needs Windows AppContainer/restricted token and Linux mount + network
-  namespaces/seccomp, which is not implemented.
+  using already-loaded native code or OS primitives is possible. The OS-level
+  sandbox (Windows AppContainer/restricted token, Linux namespaces/seccomp) is
+  scoped as a follow-up in
+  [plugins-os-sandbox.md](plugins-os-sandbox.md) and is not implemented.
 - **Direct guest sockets.** The network hook blocks `socket.connect` to
   undeclared hosts, but asyncio's own wake-up socket is created before the hook
   and loopback traffic is not otherwise modelled. Plugins that need network
