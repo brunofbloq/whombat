@@ -1,38 +1,92 @@
 # Plugins
 
-Whombat can load external plugins without trusting them. A plugin declares
-what it needs in a manifest, runs in its own process, and reaches Whombat data
-only through capability-checked host calls. Its user interface is served as
-static files and rendered in a sandboxed frame.
+Whombat can run external plugins without trusting them. A plugin declares what
+it needs in a manifest, runs in its own process, and reaches Whombat data only
+through capability-checked host calls. Its user interface is served from a
+separate loopback origin and rendered in a sandboxed frame.
 
-This guide documents the contract. The implementation lives in
-`src/whombat/plugins/`.
+This page is the reference for plugin authors and maintainers. The
+implementation lives in `src/whombat/plugins/`.
 
-## Two plugin styles
+## Why this architecture
 
-| Style | How it runs | Trust | Status |
-|---|---|---|---|
-| Manifest plugin | Guest process + sandboxed UI | `untrusted` | Current |
-| Legacy `whombat_*` module | Imported into the backend process | `trusted` | Deprecated |
+Plugins used to be Python modules imported into the Whombat process. That was
+convenient and it is still supported for legacy code, but it has no security
+boundary: a plugin shares the database session, the settings object and the
+event loop, and its UI is served from the application origin.
 
-Legacy modules keep working during the deprecation window. They are imported at
-start-up, mounted at `/plugins/routes/<name>/` (and `/plugins/pages/<name>/` for
-`statics/`), reported as `legacy`, and emit a `DeprecationWarning`. New work
-should use manifests.
+| Concern | Legacy `whombat_*` module | Manifest plugin |
+|---|---|---|
+| Runs in | Whombat's process | its own process |
+| Sees the database | yes, directly | only through brokers |
+| Can block the app | yes | no |
+| Can crash the app | yes | no, it is reported as `crashed` |
+| Dependency conflicts | shares Whombat's virtualenv | isolated in its own directory |
+| UI origin | same as the app | separate loopback port + sandbox |
+| Trust | `trusted`, always on | `untrusted`, disabled until approved |
+| Lifecycle | restart the app | enable / disable / restart / remove live |
 
-## Layout
+The practical wins:
+
+- **Blast-radius containment** — a buggy plugin burns its own process, not the
+  annotation session you have open.
+- **Explicit authority** — a plugin cannot read datasets unless you granted
+  `datasets.read`, and cannot reach the network outside its declared hosts.
+- **No dependency roulette** — installing a plugin no longer mutates Whombat's
+  Python environment.
+- **Safe UI** — plugin JavaScript runs in a sandboxed frame on another origin,
+  so it cannot read Whombat cookies or call authenticated endpoints.
+- **Operable** — every plugin has a status, health check, and audit trail.
+
+## Architecture
 
 ```
-<plugins_dir>/<plugin-id>/
-  plugin.toml          # required manifest
-  <package>/           # optional guest code, imported only by the guest
-  dist/                # optional UI bundle
+<plugins_dir>/<id>/plugin.toml
+        │
+        ▼
+discover_plugins()            entry points + plugins dir + legacy modules
+        │                     (manifests only, no code imported)
+        ▼
+PluginRegistry                state machine, grants, audit
+        │
+        ├── enable() ──► GuestProcess ── stdio or loopback JSON-RPC ──► plugin code
+        │                    │
+        │                    └── host.call ──► capability broker ──► Whombat
+        │
+        └── ui_url ──► PluginUIServer (127.0.0.1:<ephemeral>) ──► sandboxed iframe
 ```
 
-`plugins_dir` defaults to `~/.whombat/plugins` and is configurable with
-`WHOMBAT_PLUGINS_DIR`.
+Key modules:
 
-## Manifest
+| Module | Responsibility |
+|---|---|
+| `plugins/manifest.py` | parse and validate `plugin.toml` / `manifest.json` |
+| `plugins/discovery.py` | find plugins; report bad ones instead of dropping them |
+| `plugins/guest.py` | spawn, supervise and talk to the guest process |
+| `plugins/registry.py` | status, grants, lifecycle, brokers, audit |
+| `plugins/guest_policy.py` | in-guest audit hook (files, sockets, processes) |
+| `plugins/ui_server.py` | separate origin that serves plugin assets |
+| `plugins/legacy.py` | the old in-process loader (deprecated) |
+
+## Lifecycle
+
+| Status | Meaning |
+|---|---|
+| `discovered` | found, not yet classified |
+| `disabled` | known and inert; nothing imported or started |
+| `starting` | guest spawned, waiting for its handshake |
+| `ready` | guest answered `plugin.describe`; UI may be opened |
+| `unhealthy` | health call failed |
+| `crashed` | the guest exited unexpectedly; captured error is in `last_error` |
+| `incompatible` | `api_version` is not supported by this build |
+| `failed` | bad manifest, duplicate id, missing entry, or start-up failure |
+
+New plugins start `disabled`. Enabling approves the declared capabilities and
+starts the guest. Disabling stops it and revokes the grants. A guest that stays
+idle for `plugin_idle_timeout_seconds` (default 300, `0` disables the sweep) is
+stopped automatically. On app shutdown every guest is stopped.
+
+## Manifest reference
 
 ```toml
 id = "acoustic-export"
@@ -41,6 +95,8 @@ version = "0.3.0"
 api_version = "1.0"
 description = "Export annotations to third-party formats"
 author = "Example Org"
+attribution = "Example Org"
+thumbnail = "thumb.png"
 homepage = "https://example.org"
 license = "MIT"
 
@@ -57,149 +113,86 @@ module = "dist/plugin.js"
 
 [capabilities]
 fs_read = ["/projects/acoustic"]
-net = ["api.example.org"]
+net = ["api.example.org", "*.example.org"]
 host = ["datasets.read", "recordings.read"]
 ```
 
-Rules:
+| Field | Required | Notes |
+|---|---|---|
+| `id` | yes | `^[a-z0-9][a-z0-9-]{1,63}$`, unique across all sources |
+| `name` | yes | shown in the UI |
+| `version` | no | `1.0` or `1.0.0`; may be omitted |
+| `api_version` | no | defaults to `1.0`; anything else is `incompatible` |
+| `[backend].entry` | one of backend/ui | `module:attr` of a `handle(method, params)` callable |
+| `[backend].transport` | no | `stdio` (default) or `loopback` |
+| `[backend].memory_mb` | no | 16–32768; POSIX `RLIMIT_AS`, Windows Job Object |
+| `[ui].entry` | one of backend/ui | path to the HTML entry inside the plugin directory |
+| `[capabilities].fs_read` | no | absolute roots the `fs.read` broker may touch |
+| `[capabilities].net` | no | hosts the `net.get` broker may fetch |
+| `[capabilities].host` | no | broker capabilities requested at enable time |
 
-- `id` matches `^[a-z0-9][a-z0-9-]{1,63}$` and is the plugin's identity. Two
-  plugins with the same `id` are both reported as `failed` (`duplicate id`).
-- `version` and `api_version` look like `1.0` or `1.0.0`. `version` is optional;
-  a missing version is reported as `null`.
-- `api_version` must be supported by the running Whombat build (`1.0` today).
-  Anything else is `incompatible` and is never imported or started.
-- At least one of `[backend].entry` or `[ui].entry` is required.
-- Unknown keys are a validation error (`extra="forbid"`).
-- The manifest may be `plugin.toml` or `manifest.json`, and is limited to 64 KiB.
-- Manifests are declarative: no executable code, no `pip install`.
+Rules: unknown keys are rejected, the manifest is capped at 64 KiB, and at least
+one of `backend.entry` / `ui.entry` must be present.
 
-Discovery also supports Python entry points in the `whombat.plugins` group. An
-entry point must resolve to a manifest path or a mapping with the manifest
-fields.
+### Where plugins are discovered
 
-## Backend guest
+1. Python entry points in the `whombat.plugins` group, resolving to a manifest
+   path or a mapping with the manifest fields.
+2. `<plugins_dir>/<id>/plugin.toml` (or `manifest.json`). `plugins_dir` defaults
+   to `~/.whombat/plugins` and is configurable with `WHOMBAT_PLUGINS_DIR`.
+3. Legacy `whombat_*` modules on the Python path (deprecated).
 
-`[backend].entry` is `module:attr`. The attribute must be callable as
-`handle(method, params) -> result` (sync or async). The guest process is started
-with `python -m whombat.plugins._runner`, with the plugin directory on
-`sys.path` and a scrubbed environment: only `PATH`, `SYSTEMROOT`, `WINDIR`,
-`TEMP`, `TMP`, `COMSPEC`, `PATHEXT`, `LANG`, and the plugin's own `PYTHONPATH`.
-No `WHOMBAT_*` variables, database URLs, or settings are inherited.
+Two plugins with the same `id` are both reported as `failed` with
+`duplicate id`; neither runs.
 
-Transport is newline-delimited JSON-RPC 2.0 over stdin/stdout (`stdio`, the
-default), or HTTP JSON-RPC on an ephemeral `127.0.0.1` port (`loopback`).
+## Guest contract
 
-For `loopback` the host generates a random bearer token per launch and passes it
-to the guest in `WHOMBAT_PLUGIN_TOKEN`. The guest binds `127.0.0.1:0`, prints
-`{"event": "ready", "port": <n>}` on stdout, and serves `POST /rpc`. Every
-request must carry `Authorization: Bearer <token>`; a missing or wrong token
-gets `401` and no JSON-RPC is executed. The host refuses to talk to a plugin
-that rejects its token.
+`[backend].entry` resolves to a callable:
 
-### Host → guest methods
-
-| Method | Purpose |
-|---|---|
-| `plugin.describe` | Handshake; must return a JSON object |
-| `plugin.health` | Liveness and dependency checks |
-| `plugin.shutdown` | Graceful stop |
-| `invoke` | Proxied call: `{"operation": "...", "args": {...}}` |
-
-### Guest → host
-
-```json
-{"jsonrpc":"2.0","id":"7","method":"host.call","params":{"capability":"datasets.read","operation":"list","args":{"limit":20}}}
+```python
+def handle(method: str, params: dict):
+    ...
 ```
 
-Ship operations:
+It may be `async`. Supported methods:
 
-| Capability | Operation | Result |
+| Method | Direction | Purpose |
 |---|---|---|
-| `datasets.read` | `list` | `{"datasets": [{"id": "...", "name": "..."}]}` |
-| `recordings.read` | `count` | `{"count": 42}` |
-| `fs.read` | `read_text` | `{"path": "...", "text": "..."}` for a file inside the declared `fs_read` roots |
-| `net.get` | `fetch` | `{"status": 200, "text": "..."}` for an http(s) URL on a declared `net` host |
+| `plugin.describe` | host → guest | handshake; return a dict |
+| `plugin.health` | host → guest | liveness; return a dict |
+| `plugin.invoke` | host → guest | `params = {"operation": ..., "args": {...}}` |
+| `plugin.shutdown` | host → guest | graceful stop |
+| `host.call` | guest → host | broker request (capability checked) |
 
-A call for any other capability, or one that was not granted, fails with
-`-32001` and is written to the audit log. Undeclared capabilities cannot be
-granted at runtime.
+Transports:
 
-### Error codes
+- `stdio` — newline-delimited JSON-RPC 2.0 over stdin/stdout.
+- `loopback` — HTTP JSON-RPC on `127.0.0.1:0`, authenticated with a random
+  per-launch bearer token passed in `WHOMBAT_PLUGIN_TOKEN`; the guest prints
+  `{"event": "ready", "port": <n>}` then serves `POST /rpc`. Missing or wrong
+  tokens get `401`.
 
-| Code | Meaning | HTTP mapping |
-|---|---|---|
-| `-32601` | Unknown method or operation | 400 |
-| `-32001` | Capability denied | 403 |
-| `-32002` | Call timed out | 504 |
-| `-32003` | Invalid params | 400 |
-| `-32004` | Guest unavailable | 503 |
-
-### Resource limits
-
-- `memory_mb` caps the guest. POSIX sets `RLIMIT_AS` and disables core dumps
-  from the runner before plugin code is imported; Windows assigns the child to a
-  Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY`, so an oversized allocation
-  fails inside the guest instead of exhausting the machine. If the limit cannot
-  be applied, the host refuses to start the plugin.
-- On Windows every guest is also placed in a Job Object with
-  `JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 1` and `KILL_ON_JOB_CLOSE`, so the kernel
-  rejects child processes even if plugin code bypasses the Python hook.
-- `call_timeout_ms` bounds each RPC, and responses are capped at 1 MiB.
-- `fs_read` is enforced for the brokered `fs.read/read_text` operation: paths are
-  resolved inside the declared roots, and anything escaping them is denied with
-  `-32001`.
-- `net` is enforced for the brokered `net.get/fetch` operation: only `http` and
-  `https` URLs are accepted, the host must match a declared entry exactly or via
-  a `*.example.org` pattern, URLs with embedded credentials are rejected,
-  redirects are refused, and responses are capped at 64 KiB.
-- The guest process installs a Python audit hook before importing plugin code
-  (`guest_policy.py`). It denies `open` outside the plugin root, the interpreter
-  installation and the declared `fs_read` roots; denies `socket.connect` to
-  hosts not declared in `net`; denies process creation (`subprocess.Popen`,
-  `os.system`, `os.exec*`, `os.spawn*`); and denies loading new native libraries
-  (`ctypes.dlopen`, `ctypes.dlsym`). A plugin that tries any of these gets
-  `PermissionError`.
-- The guest process itself is not filesystem- or network-jailed: plugin code
-  that opens a file or socket directly is outside the broker. `fs_read` and
-  `net` constrain host-brokered access, not the OS.
-
-## Lifecycle
-
-Statuses: `discovered`, `disabled`, `starting`, `ready`, `unhealthy`,
-`crashed`, `incompatible`, `failed`.
-
-- New plugins are `disabled`. Nothing from the plugin directory is imported or
-  executed until the user enables it.
-- Enabling starts the guest, completes the describe handshake, and marks the
-  plugin `ready`. Grants are persisted in `<plugins_dir>/.grants.json` together
-  with the manifest version and declared capabilities.
-- Changing the declared capabilities or the version invalidates the stored
-  grants; the plugin must be approved again.
-- A crash or timeout stops that plugin only; the rest of the app keeps serving
-  and the plugin reports `crashed` or `failed` with a message.
-- A guest that stays idle for `plugin_idle_timeout_seconds` (default 300, `0`
-  disables the sweep) is stopped and the plugin returns to `disabled`.
-- Disabling, restarting, and uninstalling work without restarting Whombat.
-- On app shutdown every guest is stopped.
+The guest runs with a scrubbed environment: `PATH`, `SYSTEMROOT`, `WINDIR`,
+`TEMP`, `TMP`, `COMSPEC`, `PATHEXT`, `LANG`, its own `PYTHONPATH`, and the
+plugin token. No Whombat settings, database URL or credentials.
 
 ## HTTP API
 
-All routes are authenticated and mounted under `/api/v1/plugins`:
+All routes are authenticated (session cookie, like the rest of `/api/v1`) and
+live under `/api/v1/plugins`.
 
-| Method | Path |
-|---|---|
-| GET | `/list/` |
-| GET | `/{id}/status/` |
-| POST | `/{id}/enable/` (optional body `{"grants": ["datasets.read"]}`) |
-| POST | `/{id}/disable/` |
-| POST | `/{id}/restart/` |
-| DELETE | `/{id}/` |
-| GET | `/{id}/health/` |
-| POST | `/{id}/invoke/` |
+| Method | Path | Body | Result |
+|---|---|---|---|
+| GET | `/list/` | – | `PluginStatus[]` |
+| GET | `/{id}/status/` | – | `PluginStatus` |
+| POST | `/{id}/enable/` | `{"grants": ["datasets.read"]}` (optional) | `PluginStatus` |
+| POST | `/{id}/disable/` | – | `PluginStatus` |
+| POST | `/{id}/restart/` | – | `PluginStatus` |
+| GET | `/{id}/health/` | – | `{status, checks, uptime_ms, last_error}` |
+| POST | `/{id}/invoke/` | `{"operation": "...", "args": {...}}` | `{"result": ...}` |
+| DELETE | `/{id}/` | – | `{id, status: "removed"}` |
 
-`PluginStatus` extends the original list entry, so existing consumers keep
-working:
+`PluginStatus`:
 
 ```json
 {
@@ -222,80 +215,217 @@ working:
 }
 ```
 
+Plugin assets are served from that loopback origin at `/{id}/<path>`, not from
+the Whombat origin. Path traversal and symlink escapes return 404.
+
+Error mapping for `invoke` and brokers: `-32001` → 403, `-32002` → 504,
+`-32003` → 400, `-32004` → 503, `-32601` → 400.
+
+## Brokers
+
+A guest asks the host for work with:
+
+```json
+{"jsonrpc":"2.0","id":"7","method":"host.call","params":{"capability":"datasets.read","operation":"list","args":{"limit":20}}}
+```
+
+| Capability | Operation | Args | Result |
+|---|---|---|---|
+| `datasets.read` | `list` | `{"limit"?: int}` | `{"datasets": [{"id", "name"}]}` |
+| `recordings.read` | `count` | – | `{"count": int}` |
+| `fs.read` | `read_text` | `{"path": "relative/or/absolute"}` | `{"path", "text"}` (≤ 64 KiB) |
+| `net.get` | `fetch` | `{"url": "https://..."}` | `{"status", "text"}` (≤ 64 KiB) |
+
+Rules:
+
+- The capability must be declared in `capabilities.host` **and** approved at
+  enable time; otherwise `-32001`, and the denial is written to the
+  `whombat.plugins.audit` logger.
+- `fs.read` only accepts paths inside the manifest's `fs_read` roots.
+- `net.get` accepts `http`/`https`, only declared hosts (exact or `*.domain`),
+  rejects credentials in the URL and redirects, and times out after 5 s.
+- Unknown operations fail with `-32601`.
+
+Adding a new broker is host work: register a handler in
+`_HOST_OPERATIONS` in `plugins/registry.py` with the capability/operation pair,
+document it here, and add a test. Keep capabilities narrow.
+
 ## UI contract
 
-Plugin assets are served from a **separate loopback origin**, not from the
-Whombat origin. At start-up (or on the first request after a hot refresh)
-Whombat starts a small asset server on an ephemeral `127.0.0.1` port and
-reports each plugin's `ui_url` as an absolute URL such as
-`http://127.0.0.1:49152/acoustic-export/dist/index.html`. The application
-origin no longer serves plugin HTML.
+`ui_url` is absolute (`http://127.0.0.1:<port>/<id>/<entry>`). The host opens it
+only for `ready` plugins, at `/plugins/view/?id=<id>`, inside:
 
-Resolution on that origin is confined: absolute paths, `..` segments, and
-symlinks that escape the plugin root return 404. The origin sets no cookies and
-sends no CORS headers, so a page there cannot act as the user.
+```html
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" src="<ui_url>"></iframe>
+```
 
-The UI renders in an iframe with `sandbox="allow-scripts"` and no
-`allow-same-origin`. Even though the asset origin is already separate, the
-sandbox gives the frame an opaque origin: it cannot read host cookies,
-`localStorage`, or `IndexedDB`, and no plugin script runs in the host document.
-The host page opens it at `/plugins/view/?id=<plugin-id>` and only for `ready`
-plugins.
+Without `allow-same-origin` the frame gets an opaque origin: it cannot read host
+cookies, `localStorage` or `IndexedDB`, and no plugin script runs in the host
+document.
 
 Handshake:
 
-1. The frame posts `{type: "plugin.ready", id, version}`.
-2. The host validates `event.source`, requires `event.origin === "null"`, checks
-   the `id` against the opened plugin, and replies with
-   `{type: "host.init", theme, locale, capabilities}`.
-3. UI calls must go through the message bridge; direct DOM or storage access is
-   not part of the contract.
+1. Frame posts `{type: "plugin.ready", id, version}`.
+2. Host validates `event.source`, requires `event.origin === "null"`, checks
+   `id`, then replies `{type: "host.init", theme, locale, capabilities}`.
+3. Calls go through the bridge only; direct DOM or storage access is not part
+   of the contract.
 
 ## Security model
 
 - Untrusted backend code is never imported by the host.
-- Guests get no credentials, session, database URL, or settings object.
-- Capability checks fail closed for undeclared or ungranted operations.
-- Guest output is size-bounded and stderr is kept in a small ring buffer.
-- Every enable/disable and every denied capability is logged on the
-  `whombat.plugins.audit` logger.
+- Guests get no credentials, session, database URL or settings.
+- Guests install a Python audit hook before plugin code is imported. It denies:
+  `open` outside the plugin root, the interpreter and the `fs_read` roots;
+  `socket.connect` to hosts outside `net`; process creation
+  (`subprocess.Popen`, `os.system`, `os.exec*`, `os.spawn*`); and loading new
+  native libraries (`ctypes.dlopen`, `ctypes.dlsym`).
+- On Windows every guest is additionally in a Job Object with
+  `ActiveProcessLimit = 1`, so the kernel rejects child processes even if the
+  hook is bypassed.
+- `memory_mb` caps the guest (`RLIMIT_AS` on POSIX, Job Object on Windows).
+- Every enable/disable and every denied call is logged on
+  `whombat.plugins.audit`.
 
-### Known gaps
+Not enforced: a true OS jail. Native code that is already loaded, or OS
+primitives that bypass Python, can still escape the hook. The OS-level sandbox
+(Windows AppContainer/restricted token, Linux namespaces/seccomp) is scoped as a
+follow-up in [plugins-os-sandbox.md](plugins-os-sandbox.md).
 
-These spec items are not implemented yet and are tracked here so the contract
-does not overpromise:
+## Worked example: `whombat_tflm_export`
 
-- **No OS jail for files and sockets.** The runtime policy is a Python audit
-  hook, and on Windows the Job Object blocks child processes at kernel level.
-  Filesystem and network isolation still rely on the hook: a determined bypass
-  using already-loaded native code or OS primitives is possible. The OS-level
-  sandbox (Windows AppContainer/restricted token, Linux namespaces/seccomp) is
-  scoped as a follow-up in
-  [plugins-os-sandbox.md](plugins-os-sandbox.md) and is not implemented.
-- **Direct guest sockets.** The network hook blocks `socket.connect` to
-  undeclared hosts, but asyncio's own wake-up socket is created before the hook
-  and loopback traffic is not otherwise modelled. Plugins that need network
-  access should use `net.get/fetch`, which is fully checked.
+The TFLM export plugin is a real integration that predates the new platform. It
+is a useful template because it has both a backend endpoint and a data
+transformation.
 
-## Example guest
+### How it works today (legacy)
 
-```python
-# acoustic_export/plugin.py
-def handle(method: str, params: dict):
-    if method == "plugin.describe":
-        return {"id": "acoustic-export", "version": "0.3.0"}
-    if method == "plugin.health":
-        return {"status": "ok"}
-    if method == "invoke" and params["operation"] == "ping":
-        return {"pong": True}
-    raise ValueError("unsupported")
+```
+back/src/whombat_tflm_export/
+  __init__.py      # __description__, __version__, exports router
+  router.py        # POST /export/, POST /export/report/
+  export.py        # build_export(), load_profile(), ExportResult
+  categories.yaml
 ```
 
-## Migrating a legacy plugin
+`__init__.py`:
+
+```python
+from whombat_tflm_export.export import ExportResult, build_export, load_profile
+from whombat_tflm_export.router import router
+
+__description__ = "Export annotation projects as audio-recognizer-vandalism datasets."
+__version__ = "0.1.0"
+```
+
+`router.py` declares ordinary FastAPI endpoints and receives Whombat internals
+directly:
+
+```python
+from whombat.routes.dependencies import Session, WhombatSettings
+
+router = APIRouter()
+
+@router.post("/export/")
+async def export_project(
+    request: ExportRequest, session: Session, settings: WhombatSettings
+):
+    result = await build_export(
+        session, settings.audio_dir, request.project_uuid, load_profile()
+    )
+    return StreamingResponse(BytesIO(result.zip_bytes), media_type="application/zip")
+```
+
+Because the module name starts with `whombat_` and it exposes `__description__`,
+Whombat imports it at startup and mounts it at
+`/plugins/routes/tflm_export/export/`. It appears in the plugin list as
+`legacy: true`, `trust: "trusted"`, `status: "ready"`.
+
+That is the whole integration: no registration file, no build step. Put a
+`whombat_<name>` package on the Python path and restart.
+
+### Same plugin as a manifest plugin
+
+```
+~/.whombat/plugins/tflm-export/
+  plugin.toml
+  tflm_export/__init__.py
+  dist/index.html
+```
+
+```toml
+id = "tflm-export"
+name = "TFLM Export"
+version = "0.1.0"
+api_version = "1.0"
+[backend]
+entry = "tflm_export:handle"
+[ui]
+entry = "dist/index.html"
+[capabilities]
+host = ["projects.read"]
+```
+
+```python
+# tflm_export/__init__.py
+def handle(method, params):
+    if method == "plugin.describe":
+        return {"id": "tflm-export", "version": "0.1.0"}
+    if method == "plugin.health":
+        return {"status": "ok"}
+    if method == "plugin.invoke":
+        operation = params["operation"]
+        if operation == "export":
+            return {"zip": build_export_bytes(params["args"])}
+        raise ValueError(f"unsupported operation {operation}")
+```
+
+The blocker is data access. The current export reads project, recording and
+annotation tables through a `Session`; a manifest plugin cannot. Two honest
+options:
+
+1. **Keep it legacy.** It works, it is marked `legacy`, and it is unaffected by
+   the new code. This is the current state of the branch.
+2. **Add a broker and port it.** Define a narrow capability such as
+   `projects.read` / `export_payload` that returns the rows the exporter needs,
+   then move `build_export` into the guest and return the zip through `invoke`.
+   That is a design change to the broker surface, not just a file move, and
+   should be reviewed like one.
+
+A UI is optional for this plugin: the export can be triggered from the plugin
+page through `invoke`, or from a small `dist/index.html` that calls the host
+bridge.
+
+### Checklist for a new plugin
+
+1. Pick an `id` and create `~/.whombat/plugins/<id>/plugin.toml`.
+2. Write `handle()` and expose `plugin.describe` / `plugin.health`.
+3. Declare only the capabilities you actually call.
+4. Add `dist/index.html` if you need a UI; otherwise omit `[ui]`.
+5. Start Whombat, open **Plugins**, enable it, approve the capabilities.
+6. Check `status: ready` and `GET /api/v1/plugins/<id>/health/`.
+7. Disable it and confirm the process is gone.
+
+## Migration from a legacy module
 
 1. Move the code into its own directory with a `plugin.toml`.
-2. Replace `APIRouter` endpoints with `invoke` operations, or with brokered host
-   calls if you need Whombat data.
+2. Replace router endpoints with `invoke` operations, or with broker calls if
+   you need Whombat data.
 3. Move `statics/` into `dist/` and declare `[ui].entry`.
-4. Drop the `whombat_` module from the installed environment once the manifest
-   version is in place.
+4. Remove the module from Whombat's environment once the manifest version is
+   installed.
+5. Keep both for one release if you need a transition; the legacy loader stays
+   for a deprecation window.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `incompatible` | `api_version` not supported | set `api_version = "1.0"` |
+| `failed` at discovery | bad manifest, duplicate `id`, unsupported key | fix `last_error`, restart |
+| `failed` on enable | entry module missing, guest handshake failed | check `entry`, run the module manually |
+| `crashed` | guest exited or was killed | check `last_error`; enable/restart |
+| `unhealthy` | `plugin.health` failed or timed out | inspect the guest |
+| Broker returns `-32001` | capability not declared or not granted | add it to `host` and re-enable |
+| UI 404 | `[ui].entry` wrong or file missing | verify the path inside the plugin dir |
+| UI blank | frame never sends `plugin.ready` | check the bridge in the console |

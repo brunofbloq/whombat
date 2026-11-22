@@ -10,7 +10,8 @@ Here's what's currently available:
 
 - [**Import Example Data**](https://www.google.com/search?q=../import.md): Get a quick, hands-on tour with pre-loaded data.
 - [**Navigating the Spectrogram**](https://www.google.com/search?q=spectrogram_display.md): Master viewing and interacting with spectrograms.
-- [**Export Annotations for ML Development**](export.md): Prepare and export your data for training ML models.
+- [**Export Annotations for ML Development**](export.md): Prepare and export your data for training ML models.
+- [**Using Plugins**](../plugins.md): Install, enable, and manage optional extensions.
 
 ## More Guides & Your Ideas
 

@@ -13,6 +13,7 @@ nav:
       - Importing Data into Whombat: user_guide/guides/import.md
       - Visualizing Audio with the Spectrogram: user_guide/guides/spectrogram_display.md
       - Export Annotations for ML Development: user_guide/guides/export.md
+      - Plugins: user_guide/plugins.md
   - FAQ: user_guide/faq.md
   - About the Project:
       - Authors: AUTHORS.md

@@ -24,7 +24,7 @@ nav:
       # - Python API: developer_guide/api.md
       # - HTTP REST API: developer_guide/rest_api.md
       # - Front End: developer_guide/front_end.md
-      # - Plugins: developer_guide/plugins.md
+      - Plugins: developer_guide/plugins.md
       - Contributing: CONTRIBUTING.md
       - Code of Conduct: CODE_OF_CONDUCT.md
   - Reference:

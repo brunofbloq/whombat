@@ -28,7 +28,8 @@ Learn how to perform specific tasks, see Whombat in action, and explore more adv
 
 - [**Import Example Data**](guides/import.md): The best way to get a hands-on feel\! Learn how to load the provided example data to see Whombat's features with a pre-populated project.
 - [**Navigating the Spectrogram**](guides/spectrogram_display.md): Master the art of viewing, zooming, and interacting with audio spectrograms – the heart of your annotation work.
-- [**Export Annotations for ML Development**](guides/export.md): Learn how to export your hard work in formats ready for training your machine learning models.
+- [**Export Annotations for ML Development**](guides/export.md): Learn how to export your hard work in formats ready for training your machine learning models.
+- [**Plugins**](plugins.md): Install, enable, and manage optional extensions from the Plugins page.
 - [**Explore All Guides & Use Cases**](guides/index.md): Browse our full collection of practical guides, advanced tutorials, and integration examples. We're always adding more!
 
 ## Searching for Answers
