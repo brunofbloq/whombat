@@ -32,6 +32,14 @@ def handle(method, params):
     os._exit(3)
 """
 
+MEMORY_GUEST = """
+def handle(method, params):
+    if method == "plugin.describe":
+        return {"id": "sample"}
+    data = bytearray(8192 * 1024 * 1024)
+    return {"size": len(data)}
+"""
+
 
 def make_plugin(
     tmp_path,
@@ -40,6 +48,8 @@ def make_plugin(
     api_version: str = "1.0",
     version: str = "0.1.0",
     host_caps: list[str] | None = None,
+    fs_read: list[str] | None = None,
+    memory_mb: int | None = None,
     guest: str = GUEST,
     directory: str | None = None,
     transport: str = "stdio",
@@ -59,11 +69,13 @@ def make_plugin(
                 "[backend]",
                 'entry = "sample_guest:handle"',
                 f'transport = "{transport}"',
+                *( [f"memory_mb = {memory_mb}"] if memory_mb else [] ),
                 "startup_timeout_ms = 20000",
                 "call_timeout_ms = 10000",
                 "",
                 "[capabilities]",
                 f"host = {json.dumps(host_caps or [])}",
+                f"fs_read = {json.dumps(fs_read or [])}",
                 "",
             ]
         ),
@@ -284,6 +296,55 @@ async def test_loopback_invoke_reaches_the_guest(settings, tmp_path):
     result = await registry.invoke("sample", "echo")
 
     assert result == {"echo": "echo"}
+    await registry.shutdown()
+
+
+async def test_guest_memory_limit_is_enforced(settings, tmp_path):
+    make_plugin(tmp_path, guest=MEMORY_GUEST, memory_mb=2048)
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", [])
+
+    with pytest.raises(GuestError):
+        await registry.invoke("sample", "allocate")
+
+    await registry.shutdown()
+
+
+async def test_fs_read_is_confined_to_declared_roots(settings, tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    (allowed / "inside.txt").write_text("hello", encoding="utf-8")
+    (tmp_path / "outside.txt").write_text("secret", encoding="utf-8")
+
+    make_plugin(
+        tmp_path,
+        host_caps=["fs.read"],
+        fs_read=[str(allowed)],
+    )
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", ["fs.read"])
+
+    result = await registry.handle_host_call(
+        "sample",
+        {
+            "capability": "fs.read",
+            "operation": "read_text",
+            "args": {"path": "inside.txt"},
+        },
+    )
+    assert result["text"] == "hello"
+
+    with pytest.raises(GuestError) as error:
+        await registry.handle_host_call(
+            "sample",
+            {
+                "capability": "fs.read",
+                "operation": "read_text",
+                "args": {"path": "../outside.txt"},
+            },
+        )
+    assert error.value.code == -32001
+
     await registry.shutdown()
 
 

@@ -18,6 +18,7 @@ import urllib.request
 from collections import deque
 from typing import Any, Awaitable, Callable
 
+from whombat.plugins import limits
 from whombat.plugins.discovery import PluginSource
 
 __all__ = ["GuestError", "GuestProcess"]
@@ -78,6 +79,7 @@ class GuestProcess:
         self.transport = self.backend.transport
         self.token = secrets.token_urlsafe(32)
         self.url: str | None = None
+        self._job = None
 
     @property
     def alive(self) -> bool:
@@ -128,6 +130,10 @@ class GuestProcess:
             )
         if self.transport == "loopback":
             environment["WHOMBAT_PLUGIN_TOKEN"] = self.token
+        if self.backend.memory_mb:
+            environment[limits.MEMORY_LIMIT_ENV] = str(
+                self.backend.memory_mb
+            )
 
         self._last_error = None
         self._process = await asyncio.create_subprocess_exec(
@@ -139,6 +145,18 @@ class GuestProcess:
             env=environment,
         )
         self._stderr_reader = asyncio.create_task(self._read_stderr())
+        if self.backend.memory_mb:
+            try:
+                self._job = limits.assign_windows_memory_limit(
+                    self._process.pid, self.backend.memory_mb
+                )
+            except OSError as error:
+                self._process.kill()
+                await self._process.wait()
+                raise GuestError(
+                    ERROR_UNAVAILABLE,
+                    "Could not enforce the plugin memory limit",
+                ) from error
         if self.transport == "loopback":
             await self._await_loopback()
         else:
@@ -218,6 +236,8 @@ class GuestProcess:
         for task in (self._reader, self._stderr_reader):
             if task is not None and not task.done():
                 task.cancel()
+        limits.release(self._job)
+        self._job = None
         self._fail_pending("Plugin process stopped")
         self._process = None
 

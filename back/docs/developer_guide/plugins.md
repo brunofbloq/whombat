@@ -47,6 +47,7 @@ license = "MIT"
 [backend]
 entry = "acoustic_export.plugin:handle"   # module:attr
 transport = "stdio"                        # or "loopback"
+memory_mb = 512                            # optional hard ceiling
 startup_timeout_ms = 10000
 call_timeout_ms = 5000
 
@@ -117,6 +118,7 @@ Ship operations:
 |---|---|---|
 | `datasets.read` | `list` | `{"datasets": [{"id": "...", "name": "..."}]}` |
 | `recordings.read` | `count` | `{"count": 42}` |
+| `fs.read` | `read_text` | `{"path": "...", "text": "..."}` for a file inside the declared `fs_read` roots |
 
 A call for any other capability, or one that was not granted, fails with
 `-32001` and is written to the audit log. Undeclared capabilities cannot be
@@ -131,6 +133,21 @@ granted at runtime.
 | `-32002` | Call timed out | 504 |
 | `-32003` | Invalid params | 400 |
 | `-32004` | Guest unavailable | 503 |
+
+### Resource limits
+
+- `memory_mb` caps the guest. POSIX sets `RLIMIT_AS` and disables core dumps
+  from the runner before plugin code is imported; Windows assigns the child to a
+  Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY`, so an oversized allocation
+  fails inside the guest instead of exhausting the machine. If the limit cannot
+  be applied, the host refuses to start the plugin.
+- `call_timeout_ms` bounds each RPC, and responses are capped at 1 MiB.
+- `fs_read` is enforced for the brokered `fs.read/read_text` operation: paths are
+  resolved inside the declared roots, and anything escaping them is denied with
+  `-32001`.
+- The guest process itself is not filesystem-jailed: plugin code that opens a
+  file directly is outside the broker. `fs_read` constrains host-brokered reads,
+  not the OS.
 
 ## Lifecycle
 
@@ -233,11 +250,12 @@ Handshake:
 These spec items are not implemented yet and are tracked here so the contract
 does not overpromise:
 
-- **Filesystem and network enforcement.** `fs_read` and `net` are declared and
-  shown in the manifest, and `fs_read` is not yet used to restrict anything.
-  A guest can still read files and make outbound calls.
-- **Memory ceiling.** Calls and responses are bounded, but there is no RSS
-  limit on the guest process.
+- **Network enforcement.** `net` is declared and shown, but a guest can still
+  open its own sockets; the host has no network broker to gate. Only brokered
+  operations are capability-checked.
+- **Filesystem jail for guest code.** `fs_read` confines brokered reads; it does
+  not prevent plugin code from opening files directly. A real jail needs
+  OS-level sandboxing (Windows AppContainer, Linux namespaces/seccomp).
 
 ## Example guest
 

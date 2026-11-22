@@ -59,6 +59,9 @@ class BackendSpec(_StrictModel):
     transport: Literal["stdio", "loopback"] = "stdio"
     """RPC transport used between host and guest."""
 
+    memory_mb: int | None = Field(default=None, ge=16, le=32768)
+    """Hard memory ceiling for the guest process, when enforceable."""
+
     startup_timeout_ms: int = Field(default=10_000, ge=100, le=120_000)
     call_timeout_ms: int = Field(default=5_000, ge=100, le=120_000)
 

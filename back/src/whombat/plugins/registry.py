@@ -481,7 +481,7 @@ class PluginRegistry:
             raise GuestError(-32601, "Unknown operation")
 
         self._last_activity[plugin_id] = time.monotonic()
-        return await handler(self.settings, arguments)
+        return await handler(self.settings, arguments, record)
 
     # -- grants persistence ------------------------------------------
 
@@ -538,7 +538,7 @@ def _is_within(candidate: Path, root: Path) -> bool:
     return True
 
 
-async def _list_datasets(settings, args: dict) -> dict:
+async def _list_datasets(settings, args: dict, record) -> dict:
     # Imported lazily to avoid a circular import at app start-up.
     from whombat.api.sessions import create_session
     from whombat.system.database import get_database_url
@@ -557,7 +557,7 @@ async def _list_datasets(settings, args: dict) -> dict:
         }
 
 
-async def _count_recordings(settings, args: dict) -> dict:
+async def _count_recordings(settings, args: dict, record) -> dict:
     from whombat.api.sessions import create_session
     from whombat.system.database import get_database_url
 
@@ -568,7 +568,34 @@ async def _count_recordings(settings, args: dict) -> dict:
     return {"count": int(total or 0)}
 
 
+async def _read_text(settings, args: dict, record) -> dict:
+    """Read a text file inside the plugin's declared ``fs_read`` roots."""
+    from whombat.core import files
+    from whombat.exceptions import PathOutsideRootError
+
+    manifest = record.source.manifest
+    roots = list(manifest.capabilities.fs_read) if manifest else []
+    raw = args.get("path")
+    if not isinstance(raw, str) or not raw:
+        raise GuestError(-32003, "Invalid params")
+    if not roots:
+        raise GuestError(-32001, "No filesystem roots declared")
+
+    for root in roots:
+        base = Path(root).expanduser()
+        try:
+            target = files.resolve_within_root(base / raw, base)
+        except (PathOutsideRootError, OSError):
+            continue
+        if target.is_file():
+            text = target.read_text("utf-8", "replace")[: 64 * 1024]
+            return {"path": str(target), "text": text}
+
+    raise GuestError(-32001, "Path is outside the declared roots")
+
+
 _HOST_OPERATIONS: dict[tuple[str, str], Callable[..., Awaitable[Any]]] = {
     ("datasets.read", "list"): _list_datasets,
     ("recordings.read", "count"): _count_recordings,
+    ("fs.read", "read_text"): _read_text,
 }

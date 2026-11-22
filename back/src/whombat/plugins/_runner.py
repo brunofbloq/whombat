@@ -26,6 +26,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from whombat.plugins import limits
+
 ERROR_UNKNOWN_METHOD = -32601
 ERROR_PLUGIN = -32004
 TOKEN_ENV = "WHOMBAT_PLUGIN_TOKEN"
@@ -203,6 +205,7 @@ def main() -> None:
     if arguments.root:
         sys.path.insert(0, arguments.root)
 
+    limits.apply_posix_memory_limit()
     handler = _load_handler(arguments.entry)
 
     if arguments.transport == "loopback":
