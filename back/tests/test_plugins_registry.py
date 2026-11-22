@@ -197,8 +197,33 @@ async def test_guest_crash_is_contained(settings, tmp_path):
         await registry.invoke("sample", "boom")
     assert error.value.code == -32004
 
+    for _ in range(50):
+        if registry.status("sample")["status"] == "crashed":
+            break
+        await asyncio.sleep(0.1)
+
+    status = registry.status("sample")
+    assert status["status"] == "crashed"
+    assert status["last_error"]
+
     # The registry still answers while the guest is gone.
-    assert registry.status("sample")["status"] in {"ready", "unhealthy"}
+    assert registry.list_status()
+    await registry.shutdown()
+
+
+async def test_start_failure_marks_plugin_failed(settings, tmp_path):
+    make_plugin(
+        tmp_path,
+        guest="raise SystemExit('nope')\n",
+    )
+    registry = PluginRegistry(settings)
+
+    with pytest.raises(ValueError):
+        await registry.enable("sample", [])
+
+    status = registry.status("sample")
+    assert status["status"] == "failed"
+    assert status["last_error"]
     await registry.shutdown()
 
 

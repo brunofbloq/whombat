@@ -53,6 +53,7 @@ class GuestProcess:
         self,
         source: PluginSource,
         broker: Callable[[dict], Awaitable[Any]] | None = None,
+        on_exit: Callable[[], None] | None = None,
     ) -> None:
         if source.manifest is None or source.manifest.backend is None:
             raise GuestError(ERROR_UNAVAILABLE, "Plugin has no backend")
@@ -60,6 +61,8 @@ class GuestProcess:
         self.manifest = source.manifest
         self.backend = source.manifest.backend
         self._broker = broker
+        self._on_exit = on_exit
+        self._stopping = False
         self._process: asyncio.subprocess.Process | None = None
         self._reader: asyncio.Task | None = None
         self._stderr_reader: asyncio.Task | None = None
@@ -177,6 +180,7 @@ class GuestProcess:
         if process is None:
             return
 
+        self._stopping = True
         if process.returncode is None:
             try:
                 await self.call("plugin.shutdown", {}, timeout_ms=1500)
@@ -244,7 +248,11 @@ class GuestProcess:
         finally:
             self._fail_pending("Plugin process is unavailable")
             if self._process is process:
-                self._last_error = self._last_error or "Plugin process exited"
+                self._last_error = (
+                    self._last_error or "Plugin process exited"
+                )
+            if self._on_exit is not None and not self._stopping:
+                self._on_exit()
 
     async def _read_stderr(self) -> None:
         process = self._process

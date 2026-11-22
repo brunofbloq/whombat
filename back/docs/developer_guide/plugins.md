@@ -208,9 +208,25 @@ Handshake:
 - Guest output is size-bounded and stderr is kept in a small ring buffer.
 - Every enable/disable and every denied capability is logged on the
   `whombat.plugins.audit` logger.
-- Network and filesystem capabilities are declared but not yet enforced by the
-  host; a guest can still make its own outbound calls. Treat them as an
-  inventory of intent, not a sandbox boundary.
+
+### Known gaps
+
+These spec items are not implemented yet and are tracked here so the contract
+does not overpromise:
+
+- **Distinct UI origin.** Plugin assets are served from the app origin at
+  `/plugins/assets/...`. Isolation comes from the iframe sandbox (no
+  `allow-same-origin`, opaque `"null"` origin), not from a separate port or
+  host. A plugin that is opened outside the frame would be same-origin.
+- **Filesystem and network enforcement.** `fs_read` and `net` are declared and
+  shown in the manifest, and `fs_read` is not yet used to restrict anything.
+  A guest can still read files and make outbound calls.
+- **Memory ceiling.** Calls and responses are bounded, but there is no RSS
+  limit on the guest process.
+- **Idle timeout.** Guests run until the plugin is disabled, restarted, crashes,
+  or the app stops. There is no automatic stop after inactivity.
+- **Loopback transport.** Only newline JSON-RPC over stdio is implemented; the
+  loopback HTTP transport with a per-launch bearer token is not.
 
 ## Example guest
 

@@ -16,11 +16,17 @@ def handle(method, params):
 """
 
 
-def make_plugin(base, *, version: str | None = "0.1.0", ui: bool = False):
+def make_plugin(
+    base,
+    *,
+    version: str | None = "0.1.0",
+    ui: bool = False,
+    guest: str = GUEST,
+):
     root = base / "plugins" / "sample"
     package = root / "sample_guest"
     package.mkdir(parents=True)
-    (package / "__init__.py").write_text(GUEST, encoding="utf-8")
+    (package / "__init__.py").write_text(guest, encoding="utf-8")
     lines = ['id = "sample"', 'name = "Sample"', 'api_version = "1.0"']
     if version is not None:
         lines.append(f'version = "{version}"')
@@ -124,6 +130,51 @@ class TestPluginRoutes:
         )
 
         assert response.status_code == 404
+
+
+CRASHING = """
+import os
+
+def handle(method, params):
+    if method == "plugin.describe":
+        return {"id": "sample"}
+    os._exit(4)
+"""
+
+
+class TestCrashedPlugin:
+    def test_crash_is_reported_and_invoke_returns_503(
+        self, plugin_client, cookies, tmp_path
+    ):
+        import time
+
+        add_plugin(plugin_client, tmp_path, guest=CRASHING)
+        enabled = plugin_client.post(
+            "/api/v1/plugins/sample/enable/", cookies=cookies
+        )
+        assert enabled.status_code == 200
+
+        response = plugin_client.post(
+            "/api/v1/plugins/sample/invoke/",
+            json={"operation": "anything"},
+            cookies=cookies,
+        )
+        assert response.status_code == 503
+
+        for _ in range(30):
+            status = plugin_client.get(
+                "/api/v1/plugins/sample/status/", cookies=cookies
+            )
+            if status.json()["status"] == "crashed":
+                break
+            time.sleep(0.1)
+        assert status.json()["status"] == "crashed"
+
+        # The rest of the API keeps working.
+        listed = plugin_client.get(
+            "/api/v1/plugins/list/", cookies=cookies
+        )
+        assert listed.status_code == 200
 
 
 class TestPluginAssets:

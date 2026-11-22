@@ -241,6 +241,8 @@ class PluginRegistry:
             raise ValueError(
                 record.last_error or "Plugin API version is unsupported"
             )
+        if record.status == "ready":
+            return self._status(record)
         if source.error is not None:
             raise ValueError(source.error)
         if source.legacy:
@@ -269,6 +271,7 @@ class PluginRegistry:
         guest = GuestProcess(
             source,
             broker=lambda params: self._host_call(plugin_id, params),
+            on_exit=lambda: self._mark_crashed(plugin_id),
         )
         record.status = "starting"
         try:
@@ -385,6 +388,25 @@ class PluginRegistry:
             if not record.guest.alive:
                 record.guest = None
         record.enabled_at = None
+
+    def _mark_crashed(self, plugin_id: str) -> None:
+        """Record an unexpected guest exit without disturbing the host."""
+        try:
+            record = self._record(plugin_id)
+        except PluginNotFound:
+            return
+        if record.guest is None:
+            return
+        record.status = "crashed"
+        record.last_error = (
+            record.guest.last_error or "Plugin process exited"
+        )
+        record.enabled_at = None
+        audit.warning(
+            "plugin crashed id=%s error=%s",
+            plugin_id,
+            record.last_error,
+        )
 
     # -- capability broker -------------------------------------------
 
