@@ -142,6 +142,9 @@ granted at runtime.
   Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY`, so an oversized allocation
   fails inside the guest instead of exhausting the machine. If the limit cannot
   be applied, the host refuses to start the plugin.
+- On Windows every guest is also placed in a Job Object with
+  `JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 1` and `KILL_ON_JOB_CLOSE`, so the kernel
+  rejects child processes even if plugin code bypasses the Python hook.
 - `call_timeout_ms` bounds each RPC, and responses are capped at 1 MiB.
 - `fs_read` is enforced for the brokered `fs.read/read_text` operation: paths are
   resolved inside the declared roots, and anything escaping them is denied with
@@ -262,11 +265,12 @@ Handshake:
 These spec items are not implemented yet and are tracked here so the contract
 does not overpromise:
 
-- **No OS jail.** The runtime policy is a Python audit hook. It blocks the
-  usual escape hatches (`ctypes`, subprocesses, arbitrary opens and connects),
-  but a determined bypass using already-loaded native code or OS primitives is
-  still possible. A true jail needs Windows AppContainer/restricted token and
-  Linux mount + network namespaces/seccomp, which is not implemented.
+- **No OS jail for files and sockets.** The runtime policy is a Python audit
+  hook, and on Windows the Job Object blocks child processes at kernel level.
+  Filesystem and network isolation still rely on the hook: a determined bypass
+  using already-loaded native code or OS primitives is possible. A true jail
+  needs Windows AppContainer/restricted token and Linux mount + network
+  namespaces/seccomp, which is not implemented.
 - **Direct guest sockets.** The network hook blocks `socket.connect` to
   undeclared hosts, but asyncio's own wake-up socket is created before the hook
   and loopback traffic is not otherwise modelled. Plugins that need network

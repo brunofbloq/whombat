@@ -528,6 +528,40 @@ async def test_guest_cannot_spawn_processes_or_load_native_code(
     await registry.shutdown()
 
 
+def test_windows_job_blocks_child_processes():
+    import os
+    import subprocess
+    import sys
+
+    if os.name != "nt":
+        pytest.skip("Job Objects are Windows-only")
+
+    from whombat.plugins import limits
+
+    script = (
+        "import subprocess, sys, time\n"
+        "time.sleep(1.5)\n"
+        "try:\n"
+        "    subprocess.run([sys.executable, '-c', 'pass'], check=True)\n"
+        "except OSError:\n"
+        "    print('blocked')\n"
+        "else:\n"
+        "    print('spawned')\n"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    job = limits.assign_windows_job(process.pid)
+
+    out, err = process.communicate(timeout=30)
+
+    assert out.strip() == "blocked", (out, err)
+    limits.release(job)
+
+
 async def test_idle_guest_is_stopped(settings, tmp_path):
     make_plugin(tmp_path)
     settings.plugin_idle_timeout_seconds = 60

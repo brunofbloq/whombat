@@ -11,12 +11,13 @@ import ctypes
 import ctypes.wintypes as wintypes
 import os
 
-__all__ = ["apply_posix_memory_limit", "assign_windows_memory_limit", "release"]
+__all__ = ["apply_posix_memory_limit", "assign_windows_job", "release"]
 
 MEMORY_LIMIT_ENV = "WHOMBAT_PLUGIN_MEMORY_MB"
 
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x0000_0100
+_JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x0000_0008
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x0000_2000
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
@@ -41,8 +42,8 @@ def apply_posix_memory_limit() -> None:
         pass
 
 
-def assign_windows_memory_limit(pid: int, limit_mb: int):
-    """Assign ``pid`` to a Job Object with a memory cap; returns the handle."""
+def assign_windows_job(pid: int, memory_mb: int | None = None):
+    """Put ``pid`` in a Job Object that forbids child processes."""
     if os.name != "nt":
         return None
 
@@ -55,11 +56,15 @@ def assign_windows_memory_limit(pid: int, limit_mb: int):
         raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
 
     info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-    info.BasicLimitInformation.LimitFlags = (
-        _JOB_OBJECT_LIMIT_PROCESS_MEMORY
+    flags = (
+        _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
         | _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     )
-    info.ProcessMemoryLimit = limit_mb * 1024 * 1024
+    info.BasicLimitInformation.ActiveProcessLimit = 1
+    if memory_mb:
+        flags |= _JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        info.ProcessMemoryLimit = memory_mb * 1024 * 1024
+    info.BasicLimitInformation.LimitFlags = flags
 
     if not kernel32.SetInformationJobObject(
         job,

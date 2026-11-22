@@ -152,18 +152,22 @@ class GuestProcess:
             env=environment,
         )
         self._stderr_reader = asyncio.create_task(self._read_stderr())
-        if self.backend.memory_mb:
+        if os.name == "nt":
             try:
-                self._job = limits.assign_windows_memory_limit(
+                self._job = limits.assign_windows_job(
                     self._process.pid, self.backend.memory_mb
                 )
             except OSError as error:
-                self._process.kill()
-                await self._process.wait()
-                raise GuestError(
-                    ERROR_UNAVAILABLE,
-                    "Could not enforce the plugin memory limit",
-                ) from error
+                if self.backend.memory_mb:
+                    self._process.kill()
+                    await self._process.wait()
+                    raise GuestError(
+                        ERROR_UNAVAILABLE,
+                        "Could not enforce the plugin memory limit",
+                    ) from error
+                self._last_error = (
+                    "Could not contain the plugin process"
+                )
         if self.transport == "loopback":
             await self._await_loopback()
         else:
