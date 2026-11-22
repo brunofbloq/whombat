@@ -49,6 +49,7 @@ def make_plugin(
     version: str = "0.1.0",
     host_caps: list[str] | None = None,
     fs_read: list[str] | None = None,
+    net: list[str] | None = None,
     memory_mb: int | None = None,
     guest: str = GUEST,
     directory: str | None = None,
@@ -76,6 +77,7 @@ def make_plugin(
                 "[capabilities]",
                 f"host = {json.dumps(host_caps or [])}",
                 f"fs_read = {json.dumps(fs_read or [])}",
+                f"net = {json.dumps(net or [])}",
                 "",
             ]
         ),
@@ -345,6 +347,82 @@ async def test_fs_read_is_confined_to_declared_roots(settings, tmp_path):
         )
     assert error.value.code == -32001
 
+    await registry.shutdown()
+
+
+async def test_net_broker_only_reaches_declared_hosts(settings, tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server API
+            if self.path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", "http://example.com/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = b"hello"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    make_plugin(tmp_path, host_caps=["net.get"], net=["127.0.0.1"])
+    registry = PluginRegistry(settings)
+    await registry.enable("sample", ["net.get"])
+
+    result = await registry.handle_host_call(
+        "sample",
+        {
+            "capability": "net.get",
+            "operation": "fetch",
+            "args": {"url": f"http://127.0.0.1:{port}/"},
+        },
+    )
+    assert result["text"] == "hello"
+
+    with pytest.raises(GuestError) as denied:
+        await registry.handle_host_call(
+            "sample",
+            {
+                "capability": "net.get",
+                "operation": "fetch",
+                "args": {"url": f"http://localhost:{port}/"},
+            },
+        )
+    assert denied.value.code == -32001
+
+    with pytest.raises(GuestError) as scheme:
+        await registry.handle_host_call(
+            "sample",
+            {
+                "capability": "net.get",
+                "operation": "fetch",
+                "args": {"url": "file:///etc/passwd"},
+            },
+        )
+    assert scheme.value.code == -32003
+
+    with pytest.raises(GuestError) as redirect:
+        await registry.handle_host_call(
+            "sample",
+            {
+                "capability": "net.get",
+                "operation": "fetch",
+                "args": {"url": f"http://127.0.0.1:{port}/redirect"},
+            },
+        )
+    assert redirect.value.code == -32003
+
+    server.shutdown()
     await registry.shutdown()
 
 

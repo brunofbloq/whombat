@@ -119,6 +119,7 @@ Ship operations:
 | `datasets.read` | `list` | `{"datasets": [{"id": "...", "name": "..."}]}` |
 | `recordings.read` | `count` | `{"count": 42}` |
 | `fs.read` | `read_text` | `{"path": "...", "text": "..."}` for a file inside the declared `fs_read` roots |
+| `net.get` | `fetch` | `{"status": 200, "text": "..."}` for an http(s) URL on a declared `net` host |
 
 A call for any other capability, or one that was not granted, fails with
 `-32001` and is written to the audit log. Undeclared capabilities cannot be
@@ -145,9 +146,13 @@ granted at runtime.
 - `fs_read` is enforced for the brokered `fs.read/read_text` operation: paths are
   resolved inside the declared roots, and anything escaping them is denied with
   `-32001`.
-- The guest process itself is not filesystem-jailed: plugin code that opens a
-  file directly is outside the broker. `fs_read` constrains host-brokered reads,
-  not the OS.
+- `net` is enforced for the brokered `net.get/fetch` operation: only `http` and
+  `https` URLs are accepted, the host must match a declared entry exactly or via
+  a `*.example.org` pattern, URLs with embedded credentials are rejected,
+  redirects are refused, and responses are capped at 64 KiB.
+- The guest process itself is not filesystem- or network-jailed: plugin code
+  that opens a file or socket directly is outside the broker. `fs_read` and
+  `net` constrain host-brokered access, not the OS.
 
 ## Lifecycle
 
@@ -250,9 +255,10 @@ Handshake:
 These spec items are not implemented yet and are tracked here so the contract
 does not overpromise:
 
-- **Network enforcement.** `net` is declared and shown, but a guest can still
-  open its own sockets; the host has no network broker to gate. Only brokered
-  operations are capability-checked.
+- **Network policy for guest sockets.** `net` is enforced for the brokered
+  `net.get/fetch` operation only. A guest can still open its own sockets; the
+  supported path for a plugin that needs network access is the broker, and code
+  that bypasses it is trusted code by definition.
 - **Filesystem jail for guest code.** `fs_read` confines brokered reads; it does
   not prevent plugin code from opening files directly. A real jail needs
   OS-level sandboxing (Windows AppContainer, Linux namespaces/seccomp).

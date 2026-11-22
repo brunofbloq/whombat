@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import shutil
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -42,6 +45,8 @@ STATUSES = (
 )
 
 GRANTS_FILE = ".grants.json"
+MAX_BROKER_BYTES = 64 * 1024
+MAX_BROKER_BYTES = 64 * 1024
 
 Broker = Callable[[str, dict], Awaitable[Any]]
 
@@ -594,8 +599,78 @@ async def _read_text(settings, args: dict, record) -> dict:
     raise GuestError(-32001, "Path is outside the declared roots")
 
 
+async def _net_fetch(settings, args: dict, record) -> dict:
+    """Fetch a URL, but only from the plugin's declared ``net`` hosts."""
+    import urllib.parse
+
+    raw = args.get("url")
+    if not isinstance(raw, str) or not raw:
+        raise GuestError(-32003, "Invalid params")
+
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme not in ("http", "https"):
+        raise GuestError(-32003, "Only http and https are allowed")
+    if parsed.username or parsed.password:
+        raise GuestError(-32003, "Credentials are not allowed in URLs")
+
+    host = (parsed.hostname or "").lower()
+    manifest = record.source.manifest
+    declared = (
+        [name.lower() for name in manifest.capabilities.net]
+        if manifest
+        else []
+    )
+    if not _host_allowed(host, declared):
+        raise GuestError(-32001, "Host is not declared in net")
+
+    return await asyncio.to_thread(_http_get, raw)
+
+
+def _host_allowed(host: str, declared: list[str]) -> bool:
+    if not host:
+        return False
+    for pattern in declared:
+        if pattern == host:
+            return True
+        if pattern.startswith("*.") and host.endswith(pattern[1:]):
+            return True
+    return False
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so a declared host cannot bounce elsewhere."""
+
+    def redirect_request(self, *args, **kwargs):  # noqa: ANN002
+        return None
+
+
+def _http_get(url: str) -> dict:
+    opener = urllib.request.build_opener(_NoRedirects)
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "whombat-plugin-broker/1.0"}
+    )
+    try:
+        with opener.open(request, timeout=5) as response:
+            body = response.read(MAX_BROKER_BYTES + 1)
+            status = response.status
+    except urllib.error.HTTPError as error:
+        raise GuestError(
+            -32003, f"HTTP error {error.code}"
+        ) from error
+    except (OSError, urllib.error.URLError) as error:
+        raise GuestError(-32004, "Network request failed") from error
+
+    if len(body) > MAX_BROKER_BYTES:
+        raise GuestError(-32004, "Response exceeded the broker limit")
+    return {
+        "status": status,
+        "text": body.decode("utf-8", "replace"),
+    }
+
+
 _HOST_OPERATIONS: dict[tuple[str, str], Callable[..., Awaitable[Any]]] = {
     ("datasets.read", "list"): _list_datasets,
     ("recordings.read", "count"): _count_recordings,
     ("fs.read", "read_text"): _read_text,
+    ("net.get", "fetch"): _net_fetch,
 }
