@@ -16,7 +16,7 @@ from whombat.routes.evaluations import evaluations_router
 from whombat.routes.features import features_router
 from whombat.routes.model_runs import get_model_runs_router
 from whombat.routes.notes import notes_router
-from whombat.routes.plugins import plugin_router
+from whombat.routes.plugins import get_plugin_router
 from whombat.routes.recordings import get_recording_router
 from whombat.routes.sound_event_annotations import (
     get_sound_event_annotations_router,
@@ -187,7 +187,7 @@ def get_main_router(settings: Settings):
 
     # Extensions
     main_router.include_router(
-        plugin_router,
+        get_plugin_router(settings),
         prefix="/plugins",
         tags=["Plugins"],
     )

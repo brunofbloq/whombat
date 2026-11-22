@@ -4,7 +4,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from whombat.plugins import add_plugin_pages, add_plugin_routes, load_plugins
+from whombat.plugins import (
+    PluginRegistry,
+    add_plugin_pages,
+    add_plugin_routes,
+)
 from whombat.system.settings import Settings
 
 ROOT_DIR = Path(__file__).parent.parent.parent
@@ -16,18 +20,36 @@ __all__ = ["add_routes"]
 def add_routes(app: FastAPI, settings: Settings):
     # NOTE: Import routes here to avoid circular imports
     from whombat.routes import get_main_router
+    from whombat.routes.plugins import plugin_assets_router
 
     # Add default routes.
     main_router = get_main_router(settings)
     app.include_router(main_router)
 
-    # Load plugins. A broken plugin must not stop the app from starting.
-    for name, plugin in load_plugins():
+    # Discover plugins without importing them. Guests start only when a
+    # plugin is explicitly enabled.
+    registry = PluginRegistry(settings)
+    app.state.plugin_registry = registry
+
+    # Legacy in-process plugins keep working during the deprecation window.
+    for name, plugin in registry.legacy_plugins():
         try:
             add_plugin_routes(app, name, plugin)
             add_plugin_pages(app, name, plugin)
+            warnings.warn(
+                f"Plugin {name} uses the deprecated in-process API.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         except Exception:
             warnings.warn(f"Plugin {name} failed to load.", stacklevel=2)
+
+    # Confined static assets for manifest plugins.
+    app.include_router(
+        plugin_assets_router,
+        prefix="/plugins/assets",
+        tags=["Plugins"],
+    )
 
     # Make sure the user guide directory exists.
     # Otherwise app initialization will fail.

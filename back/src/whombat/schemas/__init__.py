@@ -75,7 +75,7 @@ from whombat.schemas.features import (
 )
 from whombat.schemas.model_runs import ModelRun, ModelRunCreate, ModelRunUpdate
 from whombat.schemas.notes import Note, NoteCreate, NoteUpdate
-from whombat.schemas.plugin import PluginInfo
+from whombat.schemas.plugin import PluginInfo, PluginStatus
 from whombat.schemas.recordings import (
     Recording,
     RecordingCreate,
@@ -179,6 +179,7 @@ __all__ = [
     "Page",
     "Page",
     "PluginInfo",
+    "PluginStatus",
     "PredictedTag",
     "Recording",
     "RecordingCreate",

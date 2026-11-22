@@ -8,6 +8,7 @@ export default function Page() {
   const {
     items: plugins,
     query: { isLoading, isError },
+    actions,
   } = usePlugins();
 
   if (isLoading) {
@@ -24,21 +25,38 @@ export default function Page() {
       <div className="container p-4 mx-auto">
         <div>
           <p className="text-lg text-stone-700 dark:text-stone-300">
-            This is the list of all plugins currently installed.{" "}
+            External plugins are disabled until you enable them and approve the
+            capabilities they declare.
           </p>
         </div>
         <div className="grid grid-cols-2 gap-4 py-6">
-          {plugins?.map((plugin) => (
-            <PluginInfo
-              key={plugin.name}
-              name={plugin.name}
-              description={plugin.description}
-              attribution={plugin.attribution}
-              version={plugin.version}
-              thumbnail={plugin.thumbnail}
-              url={plugin.url}
-            />
-          ))}
+          {plugins?.map((plugin) => {
+            const pluginId = plugin.id ?? plugin.name;
+            return (
+              <PluginInfo
+                key={pluginId}
+                id={pluginId}
+                name={plugin.name}
+                description={plugin.description}
+                attribution={plugin.attribution}
+                version={plugin.version}
+                thumbnail={plugin.thumbnail}
+                url={plugin.url}
+                status={plugin.status}
+                trust={plugin.trust}
+                legacy={plugin.legacy}
+                lastError={plugin.last_error}
+                onEnable={() =>
+                  actions.enable.mutate({
+                    id: pluginId,
+                    grants: plugin.capabilities,
+                  })
+                }
+                onDisable={() => actions.disable.mutate(pluginId)}
+                onRestart={() => actions.restart.mutate(pluginId)}
+              />
+            );
+          })}
         </div>
       </div>
     </>

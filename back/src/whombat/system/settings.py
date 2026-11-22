@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     outside of the audio directory.
     """
 
+    plugins_dir: Path = Path.home() / ".whombat" / "plugins"
+    """Directory scanned for manifest based plugins.
+
+    Each plugin lives in its own subdirectory with a ``plugin.toml``.
+    Nothing in this directory is imported until the user enables it.
+    """
+
     host: str = "localhost"
     """Host on which the backend is running."""
 
